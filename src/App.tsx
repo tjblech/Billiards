@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
-  Trophy,
   Users,
   Table2,
   Play,
@@ -21,7 +20,6 @@ import {
   Medal,
   QrCode,
   Download,
-  Lock,
   Save,
   Copy,
 } from "lucide-react";
@@ -266,15 +264,22 @@ function getPlayerLastFinishedRound(matches: Match[], playerId: string | null) {
   return lastRound;
 }
 
-function applyQueue(matches: Match[]) {
-  const copy = matches.map((m) => ({
+function applyQueue(matches: Match[]): Match[] {
+  const copy: Match[] = matches.map((m): Match => ({
     ...m,
-    status: m.status === "finished" ? "finished" : m.status === "inProgress" ? "inProgress" : "waiting",
+    status:
+      m.status === "finished"
+        ? "finished"
+        : m.status === "inProgress"
+        ? "inProgress"
+        : "waiting",
     tableNumber: m.status === "inProgress" ? m.tableNumber : null,
   }));
 
   const inProgress = copy.filter((m) => m.status === "inProgress");
-  const busyPlayers = new Set(inProgress.flatMap((m) => [m.player1Id, m.player2Id]).filter(Boolean));
+  const busyPlayers = new Set(
+    inProgress.flatMap((m) => [m.player1Id, m.player2Id]).filter(Boolean)
+  );
 
   const ready = copy
     .filter(
