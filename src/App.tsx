@@ -32,6 +32,11 @@ type TeamMode = "singles" | "doubles";
 type BracketType = "single-elim" | "double-elim";
 type LateEntryMode = "bye" | "unstarted" | "replace-bye-player";
 type PublicTab = "board" | "leaderboard" | "call";
+type BracketStream = "W" | "L" | "GF";
+type MatchSource = {
+  matchId: string;
+  outcome: "winner" | "loser";
+};
 
 type Player = {
   id: string;
@@ -50,6 +55,9 @@ type Match = {
   status: MatchStatus;
   tableNumber: number | null;
   raceTo: number;
+  bracket: BracketStream;
+  source1?: MatchSource | null;
+  source2?: MatchSource | null;
 };
 
 type TournamentSettings = {
@@ -185,7 +193,8 @@ function playerName(players: Player[], id: string | null) {
   return players.find((p) => p.id === id)?.name ?? "TBD";
 }
 
-function createBracketMatches(players: Player[], settings: TournamentSettings) {
+
+function createWinnerBracketMatches(players: Player[], settings: TournamentSettings) {
   if (players.length < 2) return [] as Match[];
 
   const size = nextPowerOfTwo(players.length);
@@ -204,54 +213,215 @@ function createBracketMatches(players: Player[], settings: TournamentSettings) {
   for (let round = 1; round <= totalRounds; round++) {
     const matchCount = size / 2 ** round;
     for (let slot = 0; slot < matchCount; slot++) {
-      let player1Id: string | null = null;
-      let player2Id: string | null = null;
-      let winnerId: string | null = null;
+      const match: Match = {
+        id: `w-r${round}-m${slot + 1}`,
+        bracket: "W",
+        round,
+        slot,
+        player1Id: null,
+        player2Id: null,
+        winnerId: null,
+        status: "waiting",
+        tableNumber: null,
+        raceTo: getRaceTo(round, totalRounds, settings.gameType),
+        source1: null,
+        source2: null,
+      };
 
       if (round === 1) {
         const p1 = slots[slot * 2];
         const p2 = slots[slot * 2 + 1];
-        player1Id = p1?.id ?? null;
-        player2Id = p2?.id ?? null;
-        if (p1 && !p2) winnerId = p1.id;
-        if (p2 && !p1) winnerId = p2.id;
+        match.player1Id = p1?.id ?? null;
+        match.player2Id = p2?.id ?? null;
+        if (p1 && !p2) match.winnerId = p1.id;
+        if (p2 && !p1) match.winnerId = p2.id;
+      } else {
+        match.source1 = { matchId: `w-r${round - 1}-m${slot * 2 + 1}`, outcome: "winner" };
+        match.source2 = { matchId: `w-r${round - 1}-m${slot * 2 + 2}`, outcome: "winner" };
       }
 
-      matches.push({
-        id: `r${round}-m${slot + 1}`,
-        round,
-        slot,
-        player1Id,
-        player2Id,
-        winnerId,
-        status: "waiting",
-        tableNumber: null,
-        raceTo: getRaceTo(round, totalRounds, settings.gameType),
-      });
+      matches.push(match);
     }
   }
 
-  return propagateWinners(matches);
+  return matches;
 }
 
-function propagateWinners(matches: Match[]) {
-  const copy = matches.map((m) => ({ ...m }));
-  const maxRound = Math.max(...copy.map((m) => m.round), 1);
+function createSingleElimMatches(players: Player[], settings: TournamentSettings) {
+  return propagateBracket(createWinnerBracketMatches(players, settings), "single-elim");
+}
 
-  for (let round = 2; round <= maxRound; round++) {
-    const currentRound = copy.filter((m) => m.round === round);
-    currentRound.forEach((match) => {
-      const prev1 = copy.find((m) => m.round === round - 1 && m.slot === match.slot * 2);
-      const prev2 = copy.find((m) => m.round === round - 1 && m.slot === match.slot * 2 + 1);
-      match.player1Id = prev1?.winnerId ?? null;
-      match.player2Id = prev2?.winnerId ?? null;
-      if (match.winnerId && match.winnerId !== match.player1Id && match.winnerId !== match.player2Id) {
-        match.winnerId = null;
+function createDoubleElimMatches(players: Player[], settings: TournamentSettings) {
+  const winnerMatches = createWinnerBracketMatches(players, settings);
+  if (winnerMatches.length === 0) return [] as Match[];
+
+  const totalWinnerRounds = Math.max(...winnerMatches.map((match) => match.round), 1);
+  const losersMatches: Match[] = [];
+
+  if (totalWinnerRounds > 1) {
+    const losersRounds = 2 * (totalWinnerRounds - 1);
+
+    for (let round = 1; round <= losersRounds; round++) {
+      const stageIndex = Math.ceil(round / 2);
+      const matchCount = 2 ** Math.max(totalWinnerRounds - stageIndex - 1, 0);
+
+      for (let slot = 0; slot < matchCount; slot++) {
+        const match: Match = {
+          id: `l-r${round}-m${slot + 1}`,
+          bracket: "L",
+          round,
+          slot,
+          player1Id: null,
+          player2Id: null,
+          winnerId: null,
+          status: "waiting",
+          tableNumber: null,
+          raceTo: 1,
+          source1: null,
+          source2: null,
+        };
+
+        if (round === 1) {
+          match.source1 = { matchId: `w-r1-m${slot * 2 + 1}`, outcome: "loser" };
+          match.source2 = { matchId: `w-r1-m${slot * 2 + 2}`, outcome: "loser" };
+        } else if (round % 2 === 0) {
+          const winnerRoundToPullFrom = round / 2 + 1;
+          match.source1 = { matchId: `l-r${round - 1}-m${slot + 1}`, outcome: "winner" };
+          match.source2 = { matchId: `w-r${winnerRoundToPullFrom}-m${slot + 1}`, outcome: "loser" };
+        } else {
+          match.source1 = { matchId: `l-r${round - 1}-m${slot * 2 + 1}`, outcome: "winner" };
+          match.source2 = { matchId: `l-r${round - 1}-m${slot * 2 + 2}`, outcome: "winner" };
+        }
+
+        losersMatches.push(match);
       }
-    });
+    }
+  }
+
+  const grandFinals: Match[] = [
+    {
+      id: "gf-1",
+      bracket: "GF",
+      round: 1,
+      slot: 0,
+      player1Id: null,
+      player2Id: null,
+      winnerId: null,
+      status: "waiting",
+      tableNumber: null,
+      raceTo: 1,
+      source1: { matchId: `w-r${totalWinnerRounds}-m1`, outcome: "winner" },
+      source2: totalWinnerRounds > 1 ? { matchId: `l-r${2 * (totalWinnerRounds - 1)}-m1`, outcome: "winner" } : { matchId: `w-r${totalWinnerRounds}-m1`, outcome: "loser" },
+    },
+    {
+      id: "gf-2",
+      bracket: "GF",
+      round: 2,
+      slot: 0,
+      player1Id: null,
+      player2Id: null,
+      winnerId: null,
+      status: "waiting",
+      tableNumber: null,
+      raceTo: 1,
+      source1: { matchId: "gf-1", outcome: "winner" },
+      source2: { matchId: "gf-1", outcome: "loser" },
+    },
+  ];
+
+  return propagateBracket([...winnerMatches, ...losersMatches, ...grandFinals], "double-elim");
+}
+
+function createBracketMatches(players: Player[], settings: TournamentSettings) {
+  return settings.bracketType === "double-elim"
+    ? createDoubleElimMatches(players, settings)
+    : createSingleElimMatches(players, settings);
+}
+
+function getMatchLoserId(match: Match) {
+  if (!match.winnerId || !match.player1Id || !match.player2Id) return null;
+  return match.winnerId === match.player1Id ? match.player2Id : match.player1Id;
+}
+
+function getMatchOrderValue(match: Match) {
+  if (match.bracket === "W") return match.round * 100 + match.slot;
+  if (match.bracket === "L") return 1000 + match.round * 100 + match.slot;
+  return 2000 + match.round * 100 + match.slot;
+}
+
+function getResolvedSourcePlayer(matchesById: Map<string, Match>, source?: MatchSource | null) {
+  if (!source) return null;
+  const sourceMatch = matchesById.get(source.matchId);
+  if (!sourceMatch) return null;
+  return source.outcome === "winner" ? sourceMatch.winnerId ?? null : getMatchLoserId(sourceMatch);
+}
+
+function propagateBracket(matches: Match[], bracketType: BracketType) {
+  const copy = matches.map((match) => ({ ...match }));
+  const byId = new Map(copy.map((match) => [match.id, match]));
+  const ordered = [...copy].sort((a, b) => getMatchOrderValue(a) - getMatchOrderValue(b));
+
+  const winnerFinal = [...copy]
+    .filter((match) => match.bracket === "W")
+    .sort((a, b) => b.round - a.round || a.slot - b.slot)[0] ?? null;
+
+  for (const match of ordered) {
+    if (match.source1) match.player1Id = getResolvedSourcePlayer(byId, match.source1);
+    if (match.source2) match.player2Id = getResolvedSourcePlayer(byId, match.source2);
+
+    if (match.id === "gf-2" && bracketType === "double-elim") {
+      const gf1 = byId.get("gf-1");
+      const wbWinnerId = winnerFinal?.winnerId ?? null;
+      if (!gf1?.winnerId || !wbWinnerId || gf1.winnerId === wbWinnerId) {
+        match.player1Id = null;
+        match.player2Id = null;
+        match.winnerId = null;
+        if (match.status !== "finished") match.status = "waiting";
+        match.tableNumber = null;
+        continue;
+      }
+    }
+
+    const stillValidWinner =
+      !match.winnerId || match.winnerId === match.player1Id || match.winnerId === match.player2Id;
+    if (!stillValidWinner) {
+      match.winnerId = null;
+      match.status = "waiting";
+      match.tableNumber = null;
+    }
+
+    if (!match.winnerId && match.player1Id && !match.player2Id) {
+      match.winnerId = match.player1Id;
+      match.status = "waiting";
+      match.tableNumber = null;
+    } else if (!match.winnerId && match.player2Id && !match.player1Id) {
+      match.winnerId = match.player2Id;
+      match.status = "waiting";
+      match.tableNumber = null;
+    }
+
+    if (!match.player1Id && !match.player2Id && match.status !== "finished" && match.status !== "inProgress") {
+      match.status = "waiting";
+      match.tableNumber = null;
+    }
   }
 
   return copy;
+}
+
+function getMatchStageDepth(match: Match, matchesById: Map<string, Match>, memo = new Map<string, number>()): number {
+  if (memo.has(match.id)) return memo.get(match.id)!;
+  const deps = [match.source1?.matchId, match.source2?.matchId]
+    .filter(Boolean)
+    .map((id) => matchesById.get(id as string))
+    .filter((dep): dep is Match => Boolean(dep));
+  const depth = deps.length === 0 ? 1 : 1 + Math.max(...deps.map((dep) => getMatchStageDepth(dep, matchesById, memo)));
+  memo.set(match.id, depth);
+  return depth;
+}
+
+function getBracketPriority(match: Match) {
+  return match.bracket === "W" ? 0 : match.bracket === "L" ? 1 : 2;
 }
 
 function getPlayerLastFinishedRound(matches: Match[], playerId: string | null) {
@@ -265,35 +435,45 @@ function getPlayerLastFinishedRound(matches: Match[], playerId: string | null) {
   return lastRound;
 }
 
+
 function applyQueue(matches: Match[]): Match[] {
-  const copy: Match[] = matches.map((m): Match => ({
-    ...m,
+  const copy: Match[] = matches.map((match): Match => ({
+    ...match,
     status:
-      m.status === "finished"
+      match.status === "finished"
         ? "finished"
-        : m.status === "inProgress"
+        : match.status === "inProgress"
         ? "inProgress"
         : "waiting",
-    tableNumber: m.status === "inProgress" ? m.tableNumber : null,
+    tableNumber: match.status === "inProgress" ? match.tableNumber : null,
   }));
 
-  const inProgress = copy.filter((m) => m.status === "inProgress");
+  const inProgress = copy.filter((match) => match.status === "inProgress");
   const busyPlayers = new Set(
-    inProgress.flatMap((m) => [m.player1Id, m.player2Id]).filter(Boolean)
+    inProgress.flatMap((match) => [match.player1Id, match.player2Id]).filter(Boolean)
   );
+  const byId = new Map(copy.map((match) => [match.id, match]));
+  const depthMemo = new Map<string, number>();
 
   const ready = copy
     .filter(
-      (m) =>
-        m.status !== "finished" &&
-        m.status !== "inProgress" &&
-        m.player1Id &&
-        m.player2Id &&
-        !busyPlayers.has(m.player1Id) &&
-        !busyPlayers.has(m.player2Id)
+      (match) =>
+        match.status !== "finished" &&
+        match.status !== "inProgress" &&
+        match.player1Id &&
+        match.player2Id &&
+        !busyPlayers.has(match.player1Id) &&
+        !busyPlayers.has(match.player2Id)
     )
     .sort((a, b) => {
-      if (a.round !== b.round) return a.round - b.round;
+      const aDepth = getMatchStageDepth(a, byId, depthMemo);
+      const bDepth = getMatchStageDepth(b, byId, depthMemo);
+      if (aDepth !== bDepth) return aDepth - bDepth;
+
+      const aPriority = getBracketPriority(a);
+      const bPriority = getBracketPriority(b);
+      if (aPriority !== bPriority) return aPriority - bPriority;
+
       const aRest = Math.min(
         getPlayerLastFinishedRound(copy, a.player1Id),
         getPlayerLastFinishedRound(copy, a.player2Id)
@@ -303,6 +483,8 @@ function applyQueue(matches: Match[]): Match[] {
         getPlayerLastFinishedRound(copy, b.player2Id)
       );
       if (aRest !== bRest) return aRest - bRest;
+
+      if (a.round !== b.round) return a.round - b.round;
       return a.slot - b.slot;
     });
 
@@ -346,21 +528,60 @@ function startMatch(tournament: Tournament, matchId: string) {
   return { ...tournament, matches: applyQueue(matches) };
 }
 
+function getTournamentChampionIdFromMatches(matches: Match[], bracketType: BracketType) {
+  if (bracketType === "single-elim") {
+    const finalMatch = [...matches]
+      .filter((match) => match.bracket === "W")
+      .sort((a, b) => b.round - a.round || a.slot - b.slot)[0];
+    return finalMatch?.winnerId ?? null;
+  }
+
+  const wbFinal = [...matches]
+    .filter((match) => match.bracket === "W")
+    .sort((a, b) => b.round - a.round || a.slot - b.slot)[0];
+  const gf1 = matches.find((match) => match.id === "gf-1");
+  const gf2 = matches.find((match) => match.id === "gf-2");
+
+  if (gf2?.status === "finished" && gf2.winnerId) return gf2.winnerId;
+  if (gf1?.status === "finished" && gf1.winnerId && gf1.winnerId === wbFinal?.winnerId) return gf1.winnerId;
+  return null;
+}
+
+function getTournamentRunnerUpIdFromMatches(matches: Match[], bracketType: BracketType) {
+  if (bracketType === "single-elim") {
+    const finalMatch = [...matches]
+      .filter((match) => match.bracket === "W")
+      .sort((a, b) => b.round - a.round || a.slot - b.slot)[0];
+    return finalMatch ? getMatchLoserId(finalMatch) : null;
+  }
+
+  const gf2 = matches.find((match) => match.id === "gf-2");
+  if (gf2?.status === "finished") return getMatchLoserId(gf2);
+
+  const gf1 = matches.find((match) => match.id === "gf-1");
+  if (gf1?.status === "finished") return getMatchLoserId(gf1);
+
+  return null;
+}
+
+function isTournamentFinished(matches: Match[], bracketType: BracketType) {
+  return Boolean(getTournamentChampionIdFromMatches(matches, bracketType));
+}
+
 function finishMatch(tournament: Tournament, matchId: string, winnerId: string) {
-  const matches = tournament.matches.map((m) => {
-    if (m.id !== matchId) return { ...m };
+  const matches = tournament.matches.map((match) => {
+    if (match.id !== matchId) return { ...match };
     return {
-      ...m,
+      ...match,
       winnerId,
       status: "finished" as const,
       tableNumber: null,
     };
   });
 
-  const propagated = propagateWinners(matches);
+  const propagated = propagateBracket(matches, tournament.settings.bracketType);
   const queued = applyQueue(propagated);
-  const finalMatch = queued[queued.length - 1];
-  const status = finalMatch?.status === "finished" ? "finished" : tournament.status;
+  const status = isTournamentFinished(queued, tournament.settings.bracketType) ? "finished" : tournament.status;
   return { ...tournament, matches: queued, status };
 }
 
@@ -406,7 +627,7 @@ function addLatePlayerToBracket(
     if (!exactBye.player1Id) exactBye.player1Id = newPlayer.id;
     else exactBye.player2Id = newPlayer.id;
     exactBye.winnerId = null;
-    const rebuilt = applyQueue(propagateWinners(matches));
+    const rebuilt = applyQueue(propagateBracket(matches, tournament.settings.bracketType));
     return {
       tournament: { ...tournament, players: [...tournament.players, newPlayer], matches: rebuilt },
       message: `${trimmed} inserted into an open bye slot.`,
@@ -422,7 +643,7 @@ function addLatePlayerToBracket(
     unstartedFullRoundOne.player2Id = newPlayer.id;
     unstartedFullRoundOne.winnerId = null;
     const players = [...tournament.players, newPlayer].filter((p) => p.id !== replacedId);
-    const rebuilt = applyQueue(propagateWinners(matches));
+    const rebuilt = applyQueue(propagateBracket(matches, tournament.settings.bracketType));
     return {
       tournament: { ...tournament, players, matches: rebuilt },
       message: `${trimmed} replaced ${playerName(tournament.players, replacedId)} in an unstarted match.`,
@@ -441,7 +662,7 @@ function addLatePlayerToBracket(
     if (!openMatch.player1Id) openMatch.player1Id = newPlayer.id;
     else openMatch.player2Id = newPlayer.id;
     openMatch.winnerId = null;
-    const rebuilt = applyQueue(propagateWinners(matches));
+    const rebuilt = applyQueue(propagateBracket(matches, tournament.settings.bracketType));
     return {
       tournament: { ...tournament, players: [...tournament.players, newPlayer], matches: rebuilt },
       message: `${trimmed} added to an unstarted round-1 match.`,
@@ -455,6 +676,7 @@ function addLatePlayerToBracket(
 }
 
 
+
 type LeaderboardRow = {
   playerId: string;
   name: string;
@@ -466,21 +688,35 @@ type LeaderboardRow = {
 };
 
 function getPlacementLabel(tournament: Tournament, playerId: string) {
-  const finalMatch = tournament.matches[tournament.matches.length - 1];
+  const championId = getTournamentChampionIdFromMatches(tournament.matches, tournament.settings.bracketType);
+  const runnerUpId = getTournamentRunnerUpIdFromMatches(tournament.matches, tournament.settings.bracketType);
+
+  if (championId === playerId) return "1st";
+  if (runnerUpId === playerId) return "2nd";
+
+  if (tournament.settings.bracketType === "double-elim") {
+    const losersFinal = [...tournament.matches]
+      .filter((match) => match.bracket === "L")
+      .sort((a, b) => b.round - a.round || a.slot - b.slot)[0];
+    if (losersFinal?.status === "finished" && getMatchLoserId(losersFinal) === playerId) return "3rd";
+    return "—";
+  }
+
+  const finalMatch = [...tournament.matches]
+    .filter((match) => match.bracket === "W")
+    .sort((a, b) => b.round - a.round || a.slot - b.slot)[0];
   if (!finalMatch) return "—";
-  if (finalMatch.winnerId === playerId) return "1st";
-  if (finalMatch.status === "finished" && (finalMatch.player1Id === playerId || finalMatch.player2Id === playerId)) return "2nd";
 
   const semifinalLosers = tournament.matches
-    .filter((m) => m.round === Math.max(finalMatch.round - 1, 1) && m.status === "finished" && m.winnerId)
-    .flatMap((m) => [m.player1Id, m.player2Id].filter((id): id is string => Boolean(id && id !== m.winnerId)));
+    .filter((match) => match.bracket === "W" && match.round === Math.max(finalMatch.round - 1, 1) && match.status === "finished" && match.winnerId)
+    .flatMap((match) => [match.player1Id, match.player2Id].filter((id): id is string => Boolean(id && id !== match.winnerId)));
 
   if (semifinalLosers.includes(playerId)) return "T-3rd";
 
   const quarterRound = Math.max(finalMatch.round - 2, 1);
   const quarterLosers = tournament.matches
-    .filter((m) => m.round === quarterRound && m.status === "finished" && m.winnerId)
-    .flatMap((m) => [m.player1Id, m.player2Id].filter((id): id is string => Boolean(id && id !== m.winnerId)));
+    .filter((match) => match.bracket === "W" && match.round === quarterRound && match.status === "finished" && match.winnerId)
+    .flatMap((match) => [match.player1Id, match.player2Id].filter((id): id is string => Boolean(id && id !== match.winnerId)));
 
   if (quarterLosers.includes(playerId) && finalMatch.round >= 3) return "T-5th";
   return "—";
@@ -496,7 +732,7 @@ function buildLeaderboard(tournament: Tournament): LeaderboardRow[] {
       for (const match of tournament.matches) {
         const involved = match.player1Id === player.id || match.player2Id === player.id;
         if (!involved) continue;
-        progressRound = Math.max(progressRound, match.round);
+        progressRound = Math.max(progressRound, match.round + (match.bracket === "L" ? 20 : match.bracket === "GF" ? 40 : 0));
         if (match.status === "finished" && match.winnerId) {
           if (match.winnerId === player.id) wins += 1;
           else losses += 1;
@@ -759,7 +995,7 @@ function clubStatsNameKey(name: string) {
 
 function tournamentSummaryText(tournament: Tournament, clubStats?: ClubStatsMap) {
   const leaderboard = buildLeaderboard(tournament);
-  const championId = tournament.matches[tournament.matches.length - 1]?.winnerId ?? null;
+  const championId = getTournamentChampionIdFromMatches(tournament.matches, tournament.settings.bracketType);
   const lines = [
     `${tournament.name}`,
     `${new Date(tournament.createdAt).toLocaleString()}`,
@@ -777,18 +1013,15 @@ function tournamentSummaryText(tournament: Tournament, clubStats?: ClubStatsMap)
     "Completed matches:",
     ...tournament.matches
       .filter((match) => match.status === "finished")
-      .map((match) => `${match.id.toUpperCase()}: ${playerName(tournament.players, match.player1Id)} vs ${playerName(tournament.players, match.player2Id)} — winner ${playerName(tournament.players, match.winnerId)}`),
+      .map((match) => `${getMatchDisplayLabel(match)}: ${playerName(tournament.players, match.player1Id)} vs ${playerName(tournament.players, match.player2Id)} — winner ${playerName(tournament.players, match.winnerId)}`),
   ];
   return lines.join("\n");
 }
 
 function applyTournamentToClubStats(tournament: Tournament, existingStats: ClubStatsMap): ClubStatsMap {
   const next = JSON.parse(JSON.stringify(existingStats || {})) as ClubStatsMap;
-  const finalMatch = tournament.matches[tournament.matches.length - 1];
-  const championId = finalMatch?.winnerId ?? null;
-  const runnerUpId = finalMatch && finalMatch.status === "finished"
-    ? [finalMatch.player1Id, finalMatch.player2Id].find((id) => id && id !== finalMatch.winnerId) ?? null
-    : null;
+  const championId = getTournamentChampionIdFromMatches(tournament.matches, tournament.settings.bracketType);
+  const runnerUpId = getTournamentRunnerUpIdFromMatches(tournament.matches, tournament.settings.bracketType);
 
   for (const player of tournament.players) {
     const key = clubStatsNameKey(player.name);
@@ -920,8 +1153,8 @@ function MatchCard({
     <div className="rounded-2xl border border-emerald-300/10 bg-white/5 p-4 transition-transform duration-150 hover:-translate-y-1 hover:border-emerald-300/30">
       <div className="mb-3 flex items-center justify-between gap-2">
         <div>
-          <div className="text-sm text-slate-400">{match.id.toUpperCase()}</div>
-          <div className="text-xs text-slate-500">Round {match.round} · Single game match</div>
+          <div className="text-sm text-slate-400">{getMatchDisplayLabel(match)}</div>
+          <div className="text-xs text-slate-500">{match.bracket === "GF" ? getRoundTitle(match.round, 1, "GF") : `${match.bracket === "L" ? "Losers" : "Winners"} Round ${match.round}`} · Single game match</div>
         </div>
         <div className="flex items-center gap-2">
           {match.tableNumber ? <Pill className="bg-amber-300 text-black">Table {match.tableNumber}</Pill> : null}
@@ -973,9 +1206,36 @@ function MatchCard({
 }
 
 
-function BracketGraphic({ tournament, compact = false, animatedMatchIds = [] }: { tournament: Tournament; compact?: boolean; animatedMatchIds?: string[] }) {
+
+function getMatchDisplayLabel(match: Match) {
+  if (match.bracket === "W") return `W${match.round}-M${match.slot + 1}`;
+  if (match.bracket === "L") return `L${match.round}-M${match.slot + 1}`;
+  return match.round === 1 ? "GF-1" : "GF-2";
+}
+
+function getRoundTitle(roundNumber: number, matchCount: number, bracket: BracketStream) {
+  if (bracket === "GF") return roundNumber === 1 ? "Grand Final" : "Reset Final";
+  if (bracket === "L") return `Losers R${roundNumber}`;
+  return matchCount === 1 ? "Final" : matchCount === 2 ? "Semifinal" : `Round ${roundNumber}`;
+}
+
+function SingleBracketGraphic({
+  tournament,
+  matches,
+  compact = false,
+  animatedMatchIds = [],
+  title,
+}: {
+  tournament: Tournament;
+  matches: Match[];
+  compact?: boolean;
+  animatedMatchIds?: string[];
+  title?: string;
+}) {
+  if (matches.length === 0) return null;
+
   const roundMap = new Map<number, Match[]>();
-  for (const match of tournament.matches) {
+  for (const match of matches) {
     const arr = roundMap.get(match.round) ?? [];
     arr.push(match);
     roundMap.set(match.round, arr);
@@ -983,15 +1243,13 @@ function BracketGraphic({ tournament, compact = false, animatedMatchIds = [] }: 
 
   const orderedRounds = [...roundMap.entries()]
     .sort((a, b) => a[0] - b[0])
-    .map(([roundNumber, matches]) => [roundNumber, [...matches].sort((a, b) => a.slot - b.slot)] as const);
-
-  if (orderedRounds.length === 0) return null;
+    .map(([roundNumber, roundMatches]) => [roundNumber, [...roundMatches].sort((a, b) => a.slot - b.slot)] as const);
 
   const matchHeight = compact ? 154 : 186;
   const firstRoundGap = compact ? 38 : 58;
   const cardWidth = compact ? 290 : 330;
   const colGap = compact ? 72 : 92;
-  const roundHeaderHeight = 44;
+  const roundHeaderHeight = title ? 74 : 44;
   const innerPad = 18;
   const bottomBuffer = compact ? 96 : 128;
 
@@ -1004,26 +1262,21 @@ function BracketGraphic({ tournament, compact = false, animatedMatchIds = [] }: 
   const centersByMatch = new Map<string, number>();
   const topsByMatch = new Map<string, number>();
 
-  orderedRounds.forEach(([_, matches], roundIndex) => {
-    matches.forEach((match, index) => {
+  orderedRounds.forEach(([_, roundMatches], roundIndex) => {
+    roundMatches.forEach((match, index) => {
       let centerY = 0;
       if (roundIndex === 0) {
         centerY = roundHeaderHeight + innerPad + index * firstRoundStep + matchHeight / 2;
       } else {
-        const prevA = tournament.matches.find((m) => m.round === match.round - 1 && m.slot === match.slot * 2);
-        const prevB = tournament.matches.find((m) => m.round === match.round - 1 && m.slot === match.slot * 2 + 1);
+        const prevA = matches.find((m) => m.round === match.round - 1 && m.slot === match.slot * 2);
+        const prevB = matches.find((m) => m.round === match.round - 1 && m.slot === match.slot * 2 + 1);
         const fallbackTop = roundHeaderHeight + innerPad + index * firstRoundStep;
         const aCenter = prevA ? centersByMatch.get(prevA.id) : undefined;
         const bCenter = prevB ? centersByMatch.get(prevB.id) : undefined;
-        if (typeof aCenter === "number" && typeof bCenter === "number") {
-          centerY = (aCenter + bCenter) / 2;
-        } else if (typeof aCenter === "number") {
-          centerY = aCenter;
-        } else if (typeof bCenter === "number") {
-          centerY = bCenter;
-        } else {
-          centerY = fallbackTop + matchHeight / 2;
-        }
+        if (typeof aCenter === "number" && typeof bCenter === "number") centerY = (aCenter + bCenter) / 2;
+        else if (typeof aCenter === "number") centerY = aCenter;
+        else if (typeof bCenter === "number") centerY = bCenter;
+        else centerY = fallbackTop + matchHeight / 2;
       }
       centersByMatch.set(match.id, centerY);
       topsByMatch.set(match.id, centerY - matchHeight / 2);
@@ -1041,6 +1294,8 @@ function BracketGraphic({ tournament, compact = false, animatedMatchIds = [] }: 
           paddingBottom: `${innerPad}px`,
         }}
       >
+        {title ? <div className="absolute left-0 top-0 text-sm font-semibold uppercase tracking-[0.24em] text-emerald-200/90">{title}</div> : null}
+
         <svg
           className="pointer-events-none absolute left-0 top-0"
           width={Math.max(totalWidth, 760)}
@@ -1048,12 +1303,12 @@ function BracketGraphic({ tournament, compact = false, animatedMatchIds = [] }: 
           viewBox={`0 0 ${Math.max(totalWidth, 760)} ${totalHeight}`}
           fill="none"
         >
-          {orderedRounds.slice(0, -1).flatMap(([_, matches], roundIndex) =>
-            matches.map((match) => {
+          {orderedRounds.slice(0, -1).flatMap(([_, roundMatches], roundIndex) =>
+            roundMatches.map((match) => {
               const fromCenterY = centersByMatch.get(match.id) ?? 0;
               const fromX = innerPad + roundIndex * (cardWidth + colGap) + cardWidth;
               const elbowX = fromX + colGap / 2;
-              const nextMatch = tournament.matches.find((m) => m.round === match.round + 1 && m.slot === Math.floor(match.slot / 2));
+              const nextMatch = matches.find((m) => m.round === match.round + 1 && m.slot === Math.floor(match.slot / 2));
               const toCenterY = nextMatch ? centersByMatch.get(nextMatch.id) ?? fromCenterY : fromCenterY;
 
               return (
@@ -1067,15 +1322,15 @@ function BracketGraphic({ tournament, compact = false, animatedMatchIds = [] }: 
           )}
         </svg>
 
-        {orderedRounds.map(([roundNumber, matches], roundIndex) => {
+        {orderedRounds.map(([roundNumber, roundMatches], roundIndex) => {
           const columnLeft = innerPad + roundIndex * (cardWidth + colGap);
           return (
             <div key={roundNumber} className="absolute top-0" style={{ left: `${columnLeft}px`, width: `${cardWidth}px` }}>
               <div className="mb-3 h-11 text-center text-sm font-semibold uppercase tracking-[0.24em] text-emerald-200/90">
-                {matches.length === 1 ? "Final" : matches.length === 2 ? "Semifinal" : `Round ${roundNumber}`}
+                {getRoundTitle(roundNumber, roundMatches.length, roundMatches[0]?.bracket ?? "W")}
               </div>
 
-              {matches.map((match) => {
+              {roundMatches.map((match) => {
                 const top = topsByMatch.get(match.id) ?? roundHeaderHeight + innerPad;
                 const winner1 = match.winnerId === match.player1Id && match.winnerId;
                 const winner2 = match.winnerId === match.player2Id && match.winnerId;
@@ -1088,7 +1343,7 @@ function BracketGraphic({ tournament, compact = false, animatedMatchIds = [] }: 
                   >
                     <div className={`flex h-full flex-col rounded-[22px] border border-emerald-300/10 bg-[#081325]/95 px-3 pb-4 pt-2.5 shadow-[0_12px_30px_rgba(0,0,0,0.28)] overflow-visible transition-all duration-300 ${animatedMatchIds.includes(match.id) ? "animate-[queueSlide_0.42s_ease-out]" : ""}`}>
                       <div className="mb-2 flex items-center justify-between gap-2 text-xs text-slate-400">
-                        <span>{match.id.toUpperCase()}</span>
+                        <span>{getMatchDisplayLabel(match)}</span>
                         <StatusPill status={match.status} />
                       </div>
                       <div className="mt-1 flex-1 space-y-2 text-[15px] min-h-0">
@@ -1106,6 +1361,73 @@ function BracketGraphic({ tournament, compact = false, animatedMatchIds = [] }: 
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+function GrandFinalGraphic({
+  tournament,
+  matches,
+  animatedMatchIds = [],
+}: {
+  tournament: Tournament;
+  matches: Match[];
+  animatedMatchIds?: string[];
+}) {
+  if (matches.length === 0) return null;
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-2">
+      {matches.sort((a, b) => a.round - b.round).map((match) => {
+        const winner1 = match.winnerId === match.player1Id && match.winnerId;
+        const winner2 = match.winnerId === match.player2Id && match.winnerId;
+        return (
+          <div key={match.id} className={`rounded-[22px] border border-emerald-300/10 bg-[#081325]/95 p-4 shadow-[0_12px_30px_rgba(0,0,0,0.28)] ${animatedMatchIds.includes(match.id) ? "animate-[queueSlide_0.42s_ease-out]" : ""}`}>
+            <div className="mb-3 flex items-center justify-between gap-2 text-xs text-slate-400">
+              <span>{getRoundTitle(match.round, 1, "GF")}</span>
+              <StatusPill status={match.status} />
+            </div>
+            <div className="space-y-2">
+              <div className={`truncate rounded-xl px-4 py-3 ${winner1 ? "bg-emerald-500/18 text-emerald-100 ring-1 ring-emerald-300/20" : "bg-white/[0.06]"}`}>
+                {playerName(tournament.players, match.player1Id)}
+              </div>
+              <div className={`truncate rounded-xl px-4 py-3 ${winner2 ? "bg-emerald-500/18 text-emerald-100 ring-1 ring-emerald-300/20" : "bg-white/[0.06]"}`}>
+                {playerName(tournament.players, match.player2Id)}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function BracketGraphic({ tournament, compact = false, animatedMatchIds = [] }: { tournament: Tournament; compact?: boolean; animatedMatchIds?: string[] }) {
+  if (tournament.settings.bracketType === "single-elim") {
+    return (
+      <SingleBracketGraphic
+        tournament={tournament}
+        matches={tournament.matches.filter((match) => match.bracket === "W")}
+        compact={compact}
+        animatedMatchIds={animatedMatchIds}
+      />
+    );
+  }
+
+  const winnerMatches = tournament.matches.filter((match) => match.bracket === "W");
+  const loserMatches = tournament.matches.filter((match) => match.bracket === "L");
+  const grandFinals = tournament.matches.filter((match) => match.bracket === "GF");
+
+  return (
+    <div className="space-y-6">
+      <SingleBracketGraphic tournament={tournament} matches={winnerMatches} compact={compact} animatedMatchIds={animatedMatchIds} title="Winners Bracket" />
+      {loserMatches.length > 0 ? (
+        <SingleBracketGraphic tournament={tournament} matches={loserMatches} compact={compact} animatedMatchIds={animatedMatchIds} title="Losers Bracket" />
+      ) : null}
+      <div className="rounded-3xl border border-emerald-300/10 bg-black/20 p-4">
+        <div className="mb-3 text-sm font-semibold uppercase tracking-[0.24em] text-emerald-200/90">Grand Finals</div>
+        <GrandFinalGraphic tournament={tournament} matches={grandFinals} animatedMatchIds={animatedMatchIds} />
       </div>
     </div>
   );
@@ -1159,7 +1481,7 @@ function PublicBracketView({
   const [publicTab, setPublicTab] = useState<PublicTab>("call");
   const nextUp = tournament.matches.find((m) => m.status === "nextUp");
   const onDeck = tournament.matches.find((m) => m.status === "onDeck");
-  const championId = tournament.matches[tournament.matches.length - 1]?.winnerId ?? null;
+  const championId = getTournamentChampionIdFromMatches(tournament.matches, tournament.settings.bracketType);
   const champion = championId ? playerName(tournament.players, championId) : "";
   const publicUrl =
     typeof window !== "undefined"
@@ -1440,17 +1762,26 @@ export default function BilliardsTournamentManager() {
   const nextUp = allMatches.find((m) => m.status === "nextUp");
   const onDeck = allMatches.find((m) => m.status === "onDeck");
   const inProgress = allMatches.filter((m) => m.status === "inProgress").sort((a, b) => (a.tableNumber ?? 0) - (b.tableNumber ?? 0));
-  const championId = tournament?.matches[tournament.matches.length - 1]?.winnerId ?? null;
+  const championId = tournament ? getTournamentChampionIdFromMatches(tournament.matches, tournament.settings.bracketType) : null;
   const champion = tournament ? playerName(tournament.players, championId) : "";
-  const rounds = useMemo(() => {
-    const grouped = new Map<number, Match[]>();
-    for (const match of allMatches) {
-      const arr = grouped.get(match.round) ?? [];
-      arr.push(match);
-      grouped.set(match.round, arr);
-    }
-    return [...grouped.entries()].sort((a, b) => a[0] - b[0]);
-  }, [allMatches]);
+  const bracketSections = useMemo(() => {
+    const streams: BracketStream[] = tournament?.settings.bracketType === "double-elim" ? ["W", "L", "GF"] : ["W"];
+    return streams
+      .map((stream) => {
+        const sectionMatches = allMatches.filter((match) => match.bracket === stream);
+        const grouped = new Map<number, Match[]>();
+        for (const match of sectionMatches) {
+          const arr = grouped.get(match.round) ?? [];
+          arr.push(match);
+          grouped.set(match.round, arr);
+        }
+        return {
+          stream,
+          rounds: [...grouped.entries()].sort((a, b) => a[0] - b[0]),
+        };
+      })
+      .filter((section) => section.rounds.length > 0);
+  }, [allMatches, tournament?.settings.bracketType]);
 
   function pushHistory() {
     if (tournament) setHistory((prev) => [...prev, JSON.parse(JSON.stringify(tournament))]);
@@ -1583,7 +1914,6 @@ export default function BilliardsTournamentManager() {
     }
   }
 
-  const doubleElimNotice = bracketType === "double-elim";
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top,#123f2f_0%,#071a14_36%,#020617_100%)] p-6 text-white">
@@ -1677,8 +2007,6 @@ export default function BilliardsTournamentManager() {
                   </select>
                 </div>
               </div>
-
-              {doubleElimNotice ? <div className="mb-4 rounded-2xl border border-amber-400/30 bg-amber-500/10 p-4 text-sm text-amber-100"><AlertTriangle className="mr-2 inline h-4 w-4" /> The double-elim selector is in the UI, but the full loser’s-bracket engine still needs the dedicated next build.</div> : null}
 
               <label className="mb-2 block text-sm text-slate-300">Players or Teams (one per line)</label>
               <textarea value={playerText} onChange={(e) => setPlayerText(e.target.value)} className="min-h-[280px] w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 outline-none" />
@@ -1852,7 +2180,7 @@ export default function BilliardsTournamentManager() {
                 <Panel>
                   <div className="mb-4 flex items-center gap-2 text-xl font-semibold"><Swords className="h-5 w-5 text-emerald-300" /> Quick Bracket</div>
                   <div className="mb-3 text-sm uppercase tracking-[0.18em] text-slate-400">Live bracket board</div>
-                  <BracketGraphic tournament={tournament} compact={true} />
+                  <BracketGraphic tournament={tournament} compact={true} animatedMatchIds={animatedMatchIds} />
                 </Panel>
               </div>
             </div>
@@ -1862,15 +2190,24 @@ export default function BilliardsTournamentManager() {
                 <div className="mb-4 flex items-center gap-2 text-xl font-semibold"><Swords className="h-5 w-5 text-emerald-300" /> Admin Bracket Control</div>
                 <div className="mb-6 min-w-0">
                   <div className="mb-3 text-sm uppercase tracking-[0.18em] text-slate-400">Bracket Graphic</div>
-                  <BracketGraphic tournament={tournament} compact={true} />
+                  <BracketGraphic tournament={tournament} compact={true} animatedMatchIds={animatedMatchIds} />
                 </div>
-                <div className="space-y-6">
-                  {rounds.map(([roundNumber, matches]) => (
-                    <div key={roundNumber}>
-                      <div className="mb-3 text-lg font-semibold text-slate-200">{matches.length === 1 ? "Final" : matches.length === 2 ? "Semifinal" : `Round ${roundNumber}`}</div>
-                      <div className="grid gap-3 lg:grid-cols-2">
-                        {matches.map((match) => (
-                          <MatchCard key={match.id} tournament={tournament} match={match} admin={true} onStart={wrappedStart} onFinish={wrappedFinish} />
+                <div className="space-y-8">
+                  {bracketSections.map((section) => (
+                    <div key={section.stream}>
+                      <div className="mb-4 text-xl font-semibold text-slate-100">
+                        {section.stream === "W" ? "Winners Bracket" : section.stream === "L" ? "Losers Bracket" : "Grand Finals"}
+                      </div>
+                      <div className="space-y-6">
+                        {section.rounds.map(([roundNumber, matches]) => (
+                          <div key={`${section.stream}-${roundNumber}`}>
+                            <div className="mb-3 text-lg font-semibold text-slate-200">{getRoundTitle(roundNumber, matches.length, section.stream)}</div>
+                            <div className="grid gap-3 lg:grid-cols-2">
+                              {matches.map((match) => (
+                                <MatchCard key={match.id} tournament={tournament} match={match} admin={true} onStart={wrappedStart} onFinish={wrappedFinish} />
+                              ))}
+                            </div>
+                          </div>
                         ))}
                       </div>
                     </div>
