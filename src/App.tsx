@@ -383,15 +383,17 @@ function propagateBracket(matches: Match[], bracketType: BracketType) {
     }
 
     if (match.status !== "finished" && match.status !== "inProgress") {
+      const isRoundOneSourceMatch = !match.source1 && !match.source2;
+
       if (match.player1Id && match.player2Id) {
         match.winnerId = null;
         match.status = "waiting";
         match.tableNumber = null;
-      } else if (match.player1Id && !match.player2Id) {
+      } else if (isRoundOneSourceMatch && match.player1Id && !match.player2Id) {
         match.winnerId = match.player1Id;
         match.status = "waiting";
         match.tableNumber = null;
-      } else if (match.player2Id && !match.player1Id) {
+      } else if (isRoundOneSourceMatch && match.player2Id && !match.player1Id) {
         match.winnerId = match.player2Id;
         match.status = "waiting";
         match.tableNumber = null;
@@ -1827,16 +1829,13 @@ export default function BilliardsTournamentManager() {
   }
 
   function handleResetBracket() {
-    const settings: TournamentSettings = { gameType: "8-ball", teamMode: "singles", bracketType: "single-elim" };
-    const fresh = createTournament(DEFAULT_TOURNAMENT_NAME, DEFAULT_PLAYER_LIST, settings);
-    setName(fresh.name);
-    setPlayerText(fresh.players.map((p) => p.name).join("\n"));
-    setGameType(settings.gameType);
-    setTeamMode(settings.teamMode);
-    setBracketType(settings.bracketType);
-    setIncludeInClubStats(false);
-    setTournament(fresh);
+    localStorage.removeItem(STORAGE_KEY);
+    setTournament(null);
     setHistory([]);
+    setLateMessage("");
+    setRenameMessage("");
+    window.location.hash = "admin";
+    setMode("admin"); 
   }
 
   function handleBackToSetup() {
@@ -1982,9 +1981,29 @@ export default function BilliardsTournamentManager() {
               <button onClick={handleCopyPublicLink} disabled={!tournament} className="rounded-2xl bg-white/10 px-4 py-2 font-semibold text-white transition-transform duration-150 hover:-translate-y-0.5 disabled:opacity-40">
                 <QrCode className="mr-2 inline h-4 w-4" /> {copiedPublicLink ? "Copied Public Link" : "Copy Public Link"}
               </button>
-              <button onClick={handleResetBracket} className="rounded-2xl border border-rose-300/20 bg-rose-400/10 px-4 py-2 font-semibold text-rose-100 transition-transform duration-150 hover:-translate-y-0.5 hover:bg-rose-400/15">
-                <RefreshCw className="mr-2 inline h-4 w-4" /> Reset Bracket
+              <button
+                onClick={() => {
+                  window.location.hash = "admin";
+                  setMode("admin");
+                }}
+                disabled={!tournament}
+                className={`mt-3 w-full rounded-2xl px-4 py-3 font-semibold transition-transform duration-150 ${
+                  tournament
+                    ? "bg-white/10 text-white hover:-translate-y-0.5 hover:bg-white/15"
+                    : "cursor-not-allowed bg-white/5 text-slate-500"
+                }`}
+              >
+                Return to Bracket
               </button>
+              {tournament ? (
+                <button
+                  onClick={handleResetBracket}
+                  className="rounded-2xl bg-white/10 px-4 py-2 font-semibold text-white transition-transform duration-150 hover:-translate-y-0.5"
+                >
+                  <RefreshCw className="mr-2 inline h-4 w-4" />
+                  Reset Bracket
+                </button>
+              ) : null}
             </div>
           </div>
         </Panel>
@@ -2034,6 +2053,20 @@ export default function BilliardsTournamentManager() {
               </label>
               <button onClick={handleCreateTournament} className="mt-4 w-full rounded-2xl bg-emerald-400 px-4 py-3 font-semibold text-black transition-transform duration-150 hover:-translate-y-0.5 hover:bg-emerald-300">
                 Build Bracket + Queue
+              </button>
+              <button
+                onClick={() => {
+                  window.location.hash = "admin";
+                  setMode("admin");
+                }}
+                disabled={!tournament}
+                className={`mt-3 w-full rounded-2xl px-4 py-3 font-semibold transition-transform duration-150 ${
+                  tournament
+                    ? "bg-white/10 text-white hover:-translate-y-0.5 hover:bg-white/15"
+                    : "cursor-not-allowed bg-white/5 text-slate-500"
+                }`}
+              >
+                Return to Bracket
               </button>
             </Panel>
 
