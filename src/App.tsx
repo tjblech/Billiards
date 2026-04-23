@@ -382,23 +382,25 @@ function propagateBracket(matches: Match[], bracketType: BracketType) {
       }
     }
 
-    const stillValidWinner =
-      !match.winnerId || match.winnerId === match.player1Id || match.winnerId === match.player2Id;
-    if (!stillValidWinner) {
-      match.winnerId = null;
-      match.status = "waiting";
-      match.tableNumber = null;
-    }
-
-    if (!match.winnerId && match.player1Id && !match.player2Id) {
-      match.winnerId = match.player1Id;
-      match.status = "waiting";
-      match.tableNumber = null;
-    } else if (!match.winnerId && match.player2Id && !match.player1Id) {
-      match.winnerId = match.player2Id;
-      match.status = "waiting";
-      match.tableNumber = null;
-    }
+    if (match.status !== "finished" && match.status !== "inProgress") {
+      if (match.player1Id && match.player2Id) {
+        match.winnerId = null;
+        match.status = "waiting";
+        match.tableNumber = null;
+      } else if (match.player1Id && !match.player2Id) {
+        match.winnerId = match.player1Id;
+        match.status = "waiting";
+        match.tableNumber = null;
+      } else if (match.player2Id && !match.player1Id) {
+        match.winnerId = match.player2Id;
+        match.status = "waiting";
+        match.tableNumber = null;
+      } else {
+        match.winnerId = null;
+        match.status = "waiting";
+        match.tableNumber = null;
+      }
+}
 
     if (!match.player1Id && !match.player2Id && match.status !== "finished" && match.status !== "inProgress") {
       match.status = "waiting";
