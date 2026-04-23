@@ -423,7 +423,11 @@ function getMatchStageDepth(match: Match, matchesById: Map<string, Match>, memo 
 }
 
 function getBracketPriority(match: Match) {
-  return match.bracket === "W" ? 0 : match.bracket === "L" ? 1 : 2;
+  // alternate W/L based on round
+  if (match.bracket === "GF") return 2;
+  return match.round % 2 === 0
+    ? (match.bracket === "L" ? 0 : 1)
+    : (match.bracket === "W" ? 0 : 1);
 }
 
 function getPlayerLastFinishedRound(matches: Match[], playerId: string | null) {
@@ -1151,6 +1155,10 @@ function MatchCard({
   const p2 = playerName(tournament.players, match.player2Id);
   const openTable = getOpenTable(tournament.matches);
 
+  const isRealWin = match.status === "finished";
+  const winner1 = isRealWin && match.winnerId === match.player1Id;
+  const winner2 = isRealWin && match.winnerId === match.player2Id;
+
   return (
     <div className="rounded-2xl border border-emerald-300/10 bg-white/5 p-4 transition-transform duration-150 hover:-translate-y-1 hover:border-emerald-300/30">
       <div className="mb-3 flex items-center justify-between gap-2">
@@ -1164,13 +1172,11 @@ function MatchCard({
         </div>
       </div>
 
-      <div className="space-y-2">
-        <div className={`rounded-xl px-3 py-2 ${match.winnerId === match.player1Id && match.winnerId ? "bg-emerald-500/15 text-emerald-200" : "bg-black/25"}`}>
-          {p1}
-        </div>
-        <div className={`rounded-xl px-3 py-2 ${match.winnerId === match.player2Id && match.winnerId ? "bg-emerald-500/15 text-emerald-200" : "bg-black/25"}`}>
-          {p2}
-        </div>
+      <div className={`rounded-xl px-3 py-2 ${winner1 ? "bg-emerald-500/15 text-emerald-200" : "bg-black/25"}`}>
+        {p1}
+      </div>
+      <div className={`rounded-xl px-3 py-2 ${winner2 ? "bg-emerald-500/15 text-emerald-200" : "bg-black/25"}`}>
+        {p2}
       </div>
 
       {admin ? (
@@ -1251,7 +1257,7 @@ function SingleBracketGraphic({
   const firstRoundGap = compact ? 38 : 58;
   const cardWidth = compact ? 290 : 330;
   const colGap = compact ? 72 : 92;
-  const roundHeaderHeight = title ? 74 : 44;
+  const roundHeaderHeight = title ? 96 : 44; 
   const innerPad = 18;
   const bottomBuffer = compact ? 96 : 128;
 
@@ -1296,7 +1302,11 @@ function SingleBracketGraphic({
           paddingBottom: `${innerPad}px`,
         }}
       >
-        {title ? <div className="absolute left-0 top-0 text-sm font-semibold uppercase tracking-[0.24em] text-emerald-200/90">{title}</div> : null}
+        {title ? (
+  <div className="absolute left-0 top-0 text-sm font-semibold uppercase tracking-[0.24em] text-emerald-200/90">
+    {title}
+  </div>
+) : null}
 
         <svg
           className="pointer-events-none absolute left-0 top-0"
@@ -1328,14 +1338,16 @@ function SingleBracketGraphic({
           const columnLeft = innerPad + roundIndex * (cardWidth + colGap);
           return (
             <div key={roundNumber} className="absolute top-0" style={{ left: `${columnLeft}px`, width: `${cardWidth}px` }}>
-              <div className="mb-3 h-11 text-center text-sm font-semibold uppercase tracking-[0.24em] text-emerald-200/90">
+              <div className="mb-3 h-11 pt-6 text-center text-sm font-semibold uppercase tracking-[0.24em] text-emerald-200/90">
                 {getRoundTitle(roundNumber, roundMatches.length, roundMatches[0]?.bracket ?? "W")}
               </div>
 
               {roundMatches.map((match) => {
                 const top = topsByMatch.get(match.id) ?? roundHeaderHeight + innerPad;
-                const winner1 = match.winnerId === match.player1Id && match.winnerId;
-                const winner2 = match.winnerId === match.player2Id && match.winnerId;
+                const isRealWin = match.status === "finished";
+
+                const winner1 = isRealWin && match.winnerId === match.player1Id;
+                const winner2 = isRealWin && match.winnerId === match.player2Id;
 
                 return (
                   <div
@@ -1480,7 +1492,7 @@ function PublicBracketView({
   clubStats?: ClubStatsMap;
   animatedMatchIds?: string[];
 }) {
-  const [publicTab, setPublicTab] = useState<PublicTab>("call");
+  const [publicTab, setPublicTab] = useState<PublicTab>("board");
   const nextUp = tournament.matches.find((m) => m.status === "nextUp");
   const onDeck = tournament.matches.find((m) => m.status === "onDeck");
   const championId = getTournamentChampionIdFromMatches(tournament.matches, tournament.settings.bracketType);
