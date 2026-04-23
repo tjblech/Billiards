@@ -31,7 +31,6 @@ type GameType = "8-ball" | "9-ball";
 type TeamMode = "singles" | "doubles";
 type BracketType = "single-elim" | "double-elim";
 type LateEntryMode = "bye" | "unstarted" | "replace-bye-player";
-type PublicTab = "board" | "leaderboard" | "call";
 
 type Player = {
   id: string;
@@ -1147,24 +1146,13 @@ function LeaderboardTable({ tournament, clubStats = {} }: { tournament: Tourname
   );
 }
 
-function PublicBracketView({
-  tournament,
-  clubStats = {},
-  animatedMatchIds = [],
-}: {
-  tournament: Tournament;
-  clubStats?: ClubStatsMap;
-  animatedMatchIds?: string[];
-}) {
-  const [publicTab, setPublicTab] = useState<PublicTab>("call");
+function PublicBracketView({ tournament, clubStats = {} }: { tournament: Tournament; clubStats?: ClubStatsMap }) {
+  const [publicTab, setPublicTab] = useState<"board" | "leaderboard">("board");
   const nextUp = tournament.matches.find((m) => m.status === "nextUp");
   const onDeck = tournament.matches.find((m) => m.status === "onDeck");
   const championId = tournament.matches[tournament.matches.length - 1]?.winnerId ?? null;
   const champion = championId ? playerName(tournament.players, championId) : "";
-  const publicUrl =
-    typeof window !== "undefined"
-      ? `${window.location.origin}${window.location.pathname}#public`
-      : "#public";
+  const publicUrl = typeof window !== "undefined" ? `${window.location.origin}${window.location.pathname}#public` : "#public";
   const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(publicUrl)}`;
 
   return (
@@ -1172,45 +1160,24 @@ function PublicBracketView({
       <Panel className="border-emerald-300/15 bg-black/40">
         <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
           <div>
-            <div className="text-xs uppercase tracking-[0.24em] text-emerald-200/80">
-              Public Tournament Board
-            </div>
+            <div className="text-xs uppercase tracking-[0.24em] text-emerald-200/80">Public Tournament Board</div>
             <div className="mt-2 text-3xl font-bold">{tournament.name}</div>
-            <div className="mt-1 text-sm text-slate-300">
-              {tournament.settings.gameType} · {tournament.settings.teamMode} · {tournament.settings.bracketType}
-            </div>
+            <div className="mt-1 text-sm text-slate-300">{tournament.settings.gameType} · {tournament.settings.teamMode} · {tournament.settings.bracketType}</div>
           </div>
           <div className="grid gap-3 md:grid-cols-2">
             <div className="rounded-2xl bg-emerald-500/10 px-4 py-3">
               <div className="text-xs uppercase tracking-[0.18em] text-emerald-200/80">Next Up</div>
-              <div className="mt-1 text-xl font-semibold">
-                {nextUp
-                  ? `${playerName(tournament.players, nextUp.player1Id)} vs ${playerName(
-                      tournament.players,
-                      nextUp.player2Id
-                    )}`
-                  : "Waiting..."}
-              </div>
+              <div className="mt-1 text-xl font-semibold">{nextUp ? `${playerName(tournament.players, nextUp.player1Id)} vs ${playerName(tournament.players, nextUp.player2Id)}` : "Waiting..."}</div>
             </div>
             <div className="rounded-2xl bg-cyan-500/10 px-4 py-3">
               <div className="text-xs uppercase tracking-[0.18em] text-cyan-200/80">On Deck</div>
-              <div className="mt-1 text-xl font-semibold">
-                {onDeck
-                  ? `${playerName(tournament.players, onDeck.player1Id)} vs ${playerName(
-                      tournament.players,
-                      onDeck.player2Id
-                    )}`
-                  : "Waiting..."}
-              </div>
+              <div className="mt-1 text-xl font-semibold">{onDeck ? `${playerName(tournament.players, onDeck.player1Id)} vs ${playerName(tournament.players, onDeck.player2Id)}` : "Waiting..."}</div>
             </div>
           </div>
         </div>
-
         {champion ? (
           <div className="mt-4 rounded-2xl bg-emerald-500/12 px-4 py-3 text-emerald-100">
-            <div className="text-xs uppercase tracking-[0.18em] text-emerald-200/80">
-              Current Champion
-            </div>
+            <div className="text-xs uppercase tracking-[0.18em] text-emerald-200/80">Current Champion</div>
             <div className="mt-1 text-2xl font-bold">{champion}</div>
           </div>
         ) : null}
@@ -1220,52 +1187,23 @@ function PublicBracketView({
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
             <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Share Public View</div>
-            <div className="mt-2 break-all text-sm text-slate-300">{publicUrl}</div>
+            <div className="mt-2 text-sm text-slate-300 break-all">{publicUrl}</div>
           </div>
           <div className="flex items-center gap-4">
-            <img
-              src={qrUrl}
-              alt="QR code for public bracket view"
-              className="h-24 w-24 rounded-2xl border border-white/10 bg-white p-2"
-            />
+            <img src={qrUrl} alt="QR code for public bracket view" className="h-24 w-24 rounded-2xl border border-white/10 bg-white p-2" />
           </div>
         </div>
       </Panel>
 
       <Panel>
         <div className="mb-4 flex flex-wrap gap-3">
-          <button
-            onClick={() => setPublicTab("call")}
-            className={`rounded-2xl px-4 py-2 font-semibold transition-transform duration-150 hover:-translate-y-0.5 ${
-              publicTab === "call" ? "bg-emerald-300 text-black" : "bg-white/10 text-white"
-            }`}
-          >
-            Call to Table
-          </button>
-          <button
-            onClick={() => setPublicTab("board")}
-            className={`rounded-2xl px-4 py-2 font-semibold transition-transform duration-150 hover:-translate-y-0.5 ${
-              publicTab === "board" ? "bg-cyan-300 text-black" : "bg-white/10 text-white"
-            }`}
-          >
-            Bracket
-          </button>
-          <button
-            onClick={() => setPublicTab("leaderboard")}
-            className={`rounded-2xl px-4 py-2 font-semibold transition-transform duration-150 hover:-translate-y-0.5 ${
-              publicTab === "leaderboard" ? "bg-amber-300 text-black" : "bg-white/10 text-white"
-            }`}
-          >
-            Leaderboard
-          </button>
+          <button onClick={() => setPublicTab("board")} className={`rounded-2xl px-4 py-2 font-semibold transition-transform duration-150 hover:-translate-y-0.5 ${publicTab === "board" ? "bg-cyan-300 text-black" : "bg-white/10 text-white"}`}>Bracket</button>
+          <button onClick={() => setPublicTab("leaderboard")} className={`rounded-2xl px-4 py-2 font-semibold transition-transform duration-150 hover:-translate-y-0.5 ${publicTab === "leaderboard" ? "bg-amber-300 text-black" : "bg-white/10 text-white"}`}>Leaderboard</button>
         </div>
-
-        {publicTab === "call" ? (
-          <CallToTableView tournament={tournament} animatedMatchIds={animatedMatchIds} />
-        ) : publicTab === "board" ? (
+        {publicTab === "board" ? (
           <>
             <div className="mb-3 text-sm uppercase tracking-[0.2em] text-slate-400">Bracket</div>
-            <BracketGraphic tournament={tournament} compact={false} animatedMatchIds={animatedMatchIds} />
+            <BracketGraphic tournament={tournament} compact={false} />
           </>
         ) : (
           <>
@@ -1274,103 +1212,6 @@ function PublicBracketView({
           </>
         )}
       </Panel>
-    </div>
-  );
-}
-
-function CallToTableView({
-  tournament,
-  animatedMatchIds = [],
-}: {
-  tournament: Tournament;
-  animatedMatchIds?: string[];
-}) {
-  const nowPlaying = tournament.matches
-    .filter((m) => m.status === "inProgress")
-    .sort((a, b) => (a.tableNumber ?? 0) - (b.tableNumber ?? 0));
-
-  const nextUp = tournament.matches.find((m) => m.status === "nextUp");
-  const onDeck = tournament.matches.find((m) => m.status === "onDeck");
-
-  const bigCard = (label: string, tone: string, content: string, animated = false) => (
-    <div
-      className={`rounded-[28px] border border-white/10 p-6 md:p-8 ${
-        tone
-      } ${animated ? "animate-[queueSlide_0.55s_ease-out]" : ""}`}
-    >
-      <div className="text-sm uppercase tracking-[0.28em] text-slate-300">{label}</div>
-      <div className="mt-3 text-3xl font-bold leading-tight md:text-5xl">{content}</div>
-    </div>
-  );
-
-  return (
-    <div className="space-y-6">
-      <div className="rounded-[28px] border border-emerald-300/15 bg-black/30 p-6 md:p-8">
-        <div className="text-center text-sm uppercase tracking-[0.32em] text-emerald-200/80">
-          Call to Table
-        </div>
-        <div className="mt-3 text-center text-4xl font-bold md:text-6xl">
-          {tournament.name}
-        </div>
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-2">
-        <div className="space-y-4">
-          <div className="text-center text-sm uppercase tracking-[0.28em] text-amber-200/80">
-            Now Playing
-          </div>
-          {nowPlaying.length
-            ? nowPlaying.map((match) => (
-                <div
-                  key={match.id}
-                  className={`rounded-[28px] border border-white/10 bg-amber-500/10 p-6 md:p-8 ${
-                    animatedMatchIds.includes(match.id)
-                      ? "animate-[tablePop_0.55s_ease-out] ring-1 ring-amber-300/25"
-                      : ""
-                  }`}
-                >
-                  <div className="text-lg uppercase tracking-[0.2em] text-amber-200/80">
-                    Table {match.tableNumber}
-                  </div>
-                  <div className="mt-3 text-3xl font-bold leading-tight md:text-5xl">
-                    {playerName(tournament.players, match.player1Id)} vs{" "}
-                    {playerName(tournament.players, match.player2Id)}
-                  </div>
-                </div>
-              ))
-            : bigCard("Now Playing", "bg-white/5", "No match currently live")}
-        </div>
-
-        <div className="space-y-4">
-          <div className="text-center text-sm uppercase tracking-[0.28em] text-emerald-200/80">
-            Up Next
-          </div>
-          {bigCard(
-            "Next Up",
-            `bg-emerald-500/10 ${
-              nextUp ? "animate-[nextGlow_1.9s_ease-in-out_infinite] ring-1 ring-emerald-300/25" : ""
-            }`,
-            nextUp
-              ? `${playerName(tournament.players, nextUp.player1Id)} vs ${playerName(
-                  tournament.players,
-                  nextUp.player2Id
-                )}`
-              : "Waiting for results",
-            !!nextUp
-          )}
-          {bigCard(
-            "On Deck",
-            "bg-cyan-500/10",
-            onDeck
-              ? `${playerName(tournament.players, onDeck.player1Id)} vs ${playerName(
-                  tournament.players,
-                  onDeck.player2Id
-                )}`
-              : "Waiting...",
-            !!onDeck && animatedMatchIds.includes(onDeck.id)
-          )}
-        </div>
-      </div>
     </div>
   );
 }
@@ -1588,21 +1429,16 @@ export default function BilliardsTournamentManager() {
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top,#123f2f_0%,#071a14_36%,#020617_100%)] p-6 text-white">
       <ConfettiOverlay show={showConfetti} />
-        <style>{`
-          @keyframes queueSlide {
-            0% { opacity: 0.35; transform: translateY(22px) scale(0.97); }
-            100% { opacity: 1; transform: translateY(0) scale(1); }
-          }
-          @keyframes nextGlow {
-            0%, 100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.16); transform: scale(1); }
-            50% { box-shadow: 0 0 0 12px rgba(52, 211, 153, 0.06); transform: scale(1.025); }
-          }
-          @keyframes tablePop {
-            0% { transform: scale(0.96); filter: brightness(0.88); }
-            70% { transform: scale(1.02); filter: brightness(1.08); }
-            100% { transform: scale(1); filter: brightness(1); }
-          }
-        `}</style>
+      <style>{`
+        @keyframes queueSlide {
+          0% { opacity: 0.35; transform: translateY(12px) scale(0.985); }
+          100% { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        @keyframes slowPulse {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.12); transform: scale(1); }
+          50% { box-shadow: 0 0 0 8px rgba(52, 211, 153, 0.03); transform: scale(1.01); }
+        }
+      `}</style>
       <div className="mx-auto max-w-7xl space-y-6">
         <Panel className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
@@ -1732,7 +1568,7 @@ export default function BilliardsTournamentManager() {
             </div>
           </div>
         ) : mode === "public" ? (
-          <PublicBracketView tournament={tournament} clubStats={clubStats} animatedMatchIds={animatedMatchIds}/>
+          <PublicBracketView tournament={tournament} clubStats={clubStats} />
         ) : (
           <>
             {champion ? (
