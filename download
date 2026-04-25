@@ -1,0 +1,1739 @@
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  Users,
+  Table2,
+  Play,
+  CheckCircle2,
+  RefreshCw,
+  Globe,
+  Shield,
+  Wifi,
+  ArrowLeft,
+  Undo2,
+  UserPlus,
+  AlertTriangle,
+  Swords,
+  Crown,
+  Pencil,
+  LayoutDashboard,
+  BarChart3,
+  Medal,
+  QrCode,
+  Download,
+  Save,
+  Copy,
+} from "lucide-react";
+
+type MatchStatus = "waiting" | "onDeck" | "nextUp" | "inProgress" | "finished";
+type ViewMode = "admin" | "public";
+type AdminTab = "dashboard" | "bracket" | "leaderboard";
+type GameType = "8-ball" | "9-ball";
+type TeamMode = "singles" | "doubles";
+type BracketType = "single-elim" | "double-elim";
+type LateEntryMode = "bye" | "unstarted" | "replace-bye-player";
+
+type Player = {
+  id: string;
+  name: string;
+  seed: number;
+  isLate?: boolean;
+};
+
+type Match = {
+  id: string;
+  round: number;
+  slot: number;
+  player1Id: string | null;
+  player2Id: string | null;
+  winnerId: string | null;
+  status: MatchStatus;
+  tableNumber: number | null;
+  raceTo: number;
+};
+
+type TournamentSettings = {
+  gameType: GameType;
+  teamMode: TeamMode;
+  bracketType: BracketType;
+};
+
+type Tournament = {
+  id: string;
+  name: string;
+  status: "draft" | "live" | "finished";
+  players: Player[];
+  matches: Match[];
+  settings: TournamentSettings;
+  createdAt: string;
+  includeInClubStats?: boolean;
+  statsSaved?: boolean;
+};
+
+type ClubPlayerStats = {
+  name: string;
+  totalMatchWins: number;
+  tournamentWins: number;
+  runnerUpFinishes: number;
+  tournamentsPlayed: number;
+};
+
+type ClubStatsMap = Record<string, ClubPlayerStats>;
+
+const STORAGE_KEY = "billiards-github-pages-supabase-ready";
+const CLUB_STATS_KEY = "billiards-club-stats-v1";
+
+// ===== CLUB PLAYER CONFIG =====
+// Edit this list to match your actual club members.
+// Format: Name|Alias|Alias = Rating
+// Ratings are used only for hidden team balancing and are not shown in the UI.
+const CLUB_PLAYER_RATINGS = `TJ = 8.5
+Billy = 8.5
+Felipe = 10
+Lawrence = 10
+Denilo = 8
+JP = 9
+Noah = 5
+Ava = 5
+Cole = 6.5
+Ewan = 5.5
+Jack = 5
+Ronald = 8
+Luis = 7
+Nate = 6
+Connor = 6.5
+Steven = 6
+Adam = 7
+Tat = 8.4
+Aymane = 7
+Pat = 6.5
+Zach = 7
+Isabelle = 3
+Rezkin = 5.5
+Teddy = 5
+Andrew = 5.4
+Dat = 7.5
+Brian = 4.5
+Cristy = 6
+Maddy = 5.7
+Hailey = 3`;
+
+const DEFAULT_TOURNAMENT_NAME = "URI Billiards Club Weekly";
+
+function getDefaultPlayerListFromRatings(ratingsText: string) {
+  const names = ratingsText
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const namePart = line.split(/\s*(?:=|:|,|\t)\s*/)[0] ?? "";
+      return namePart
+        .split("|")
+        .map((part) => part.trim())
+        .filter(Boolean)[0] ?? "";
+    })
+    .filter(Boolean);
+
+  return names.join("\n");
+}
+
+const DEFAULT_PLAYER_LIST = getDefaultPlayerListFromRatings(CLUB_PLAYER_RATINGS);
+
+function uid() {
+  return Math.random().toString(36).slice(2, 10);
+}
+
+function nextPowerOfTwo(n: number) {
+  let p = 1;
+  while (p < n) p *= 2;
+  return p;
+}
+
+function generateSeedOrder(size: number): number[] {
+  if (size === 2) return [1, 2];
+  let seeds = [1, 2];
+  while (seeds.length < size) {
+    const next: number[] = [];
+    const total = seeds.length * 2 + 1;
+    for (const s of seeds) {
+      next.push(s);
+      next.push(total - s);
+    }
+    seeds = next;
+  }
+  return seeds;
+}
+
+function getRaceTo(round: number, totalRounds: number, gameType: GameType) {
+  return 1;
+}
+
+function buildPlayers(rawText: string) {
+  return rawText
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((name, index) => ({
+      id: uid(),
+      name,
+      seed: index + 1,
+    }));
+}
+
+function playerName(players: Player[], id: string | null) {
+  if (!id) return "TBD";
+  return players.find((p) => p.id === id)?.name ?? "TBD";
+}
+
+function createBracketMatches(players: Player[], settings: TournamentSettings) {
+  if (players.length < 2) return [] as Match[];
+
+  const size = nextPowerOfTwo(players.length);
+  const seedOrder = generateSeedOrder(size);
+  const slots: (Player | null)[] = Array(size).fill(null);
+
+  players.forEach((player, index) => {
+    const seed = index + 1;
+    const slotIndex = seedOrder.indexOf(seed);
+    if (slotIndex >= 0) slots[slotIndex] = player;
+  });
+
+  const totalRounds = Math.log2(size);
+  const matches: Match[] = [];
+
+  for (let round = 1; round <= totalRounds; round++) {
+    const matchCount = size / 2 ** round;
+    for (let slot = 0; slot < matchCount; slot++) {
+      let player1Id: string | null = null;
+      let player2Id: string | null = null;
+      let winnerId: string | null = null;
+
+      if (round === 1) {
+        const p1 = slots[slot * 2];
+        const p2 = slots[slot * 2 + 1];
+        player1Id = p1?.id ?? null;
+        player2Id = p2?.id ?? null;
+        if (p1 && !p2) winnerId = p1.id;
+        if (p2 && !p1) winnerId = p2.id;
+      }
+
+      matches.push({
+        id: `r${round}-m${slot + 1}`,
+        round,
+        slot,
+        player1Id,
+        player2Id,
+        winnerId,
+        status: "waiting",
+        tableNumber: null,
+        raceTo: getRaceTo(round, totalRounds, settings.gameType),
+      });
+    }
+  }
+
+  return propagateWinners(matches);
+}
+
+function propagateWinners(matches: Match[]) {
+  const copy = matches.map((m) => ({ ...m }));
+  const maxRound = Math.max(...copy.map((m) => m.round), 1);
+
+  for (let round = 2; round <= maxRound; round++) {
+    const currentRound = copy.filter((m) => m.round === round);
+    currentRound.forEach((match) => {
+      const prev1 = copy.find((m) => m.round === round - 1 && m.slot === match.slot * 2);
+      const prev2 = copy.find((m) => m.round === round - 1 && m.slot === match.slot * 2 + 1);
+      match.player1Id = prev1?.winnerId ?? null;
+      match.player2Id = prev2?.winnerId ?? null;
+      if (match.winnerId && match.winnerId !== match.player1Id && match.winnerId !== match.player2Id) {
+        match.winnerId = null;
+      }
+    });
+  }
+
+  return copy;
+}
+
+function getPlayerLastFinishedRound(matches: Match[], playerId: string | null) {
+  if (!playerId) return 0;
+  let lastRound = 0;
+  for (const match of matches) {
+    if (match.status === "finished" && (match.player1Id === playerId || match.player2Id === playerId)) {
+      lastRound = Math.max(lastRound, match.round);
+    }
+  }
+  return lastRound;
+}
+
+function applyQueue(matches: Match[]): Match[] {
+  const copy: Match[] = matches.map((m): Match => ({
+    ...m,
+    status:
+      m.status === "finished"
+        ? "finished"
+        : m.status === "inProgress"
+        ? "inProgress"
+        : "waiting",
+    tableNumber: m.status === "inProgress" ? m.tableNumber : null,
+  }));
+
+  const inProgress = copy.filter((m) => m.status === "inProgress");
+  const busyPlayers = new Set(
+    inProgress.flatMap((m) => [m.player1Id, m.player2Id]).filter(Boolean)
+  );
+
+  const ready = copy
+    .filter(
+      (m) =>
+        m.status !== "finished" &&
+        m.status !== "inProgress" &&
+        m.player1Id &&
+        m.player2Id &&
+        !busyPlayers.has(m.player1Id) &&
+        !busyPlayers.has(m.player2Id)
+    )
+    .sort((a, b) => {
+      if (a.round !== b.round) return a.round - b.round;
+      const aRest = Math.min(
+        getPlayerLastFinishedRound(copy, a.player1Id),
+        getPlayerLastFinishedRound(copy, a.player2Id)
+      );
+      const bRest = Math.min(
+        getPlayerLastFinishedRound(copy, b.player1Id),
+        getPlayerLastFinishedRound(copy, b.player2Id)
+      );
+      if (aRest !== bRest) return aRest - bRest;
+      return a.slot - b.slot;
+    });
+
+  if (ready[0]) ready[0].status = "nextUp";
+  if (ready[1]) ready[1].status = "onDeck";
+
+  return copy;
+}
+
+function getOpenTable(matches: Match[]) {
+  const used = new Set(matches.filter((m) => m.status === "inProgress" && m.tableNumber).map((m) => m.tableNumber));
+  if (!used.has(1)) return 1;
+  if (!used.has(2)) return 2;
+  return null;
+}
+
+function createTournament(name: string, playerText: string, settings: TournamentSettings, includeInClubStats = false): Tournament {
+  const players = shuffleArray(buildPlayers(playerText)).map((player, index) => ({ ...player, seed: index + 1 }));
+  const matches = applyQueue(createBracketMatches(players, settings));
+  return {
+    id: uid(),
+    name,
+    status: "live",
+    players,
+    matches,
+    settings,
+    createdAt: new Date().toISOString(),
+    includeInClubStats,
+    statsSaved: false,
+  };
+}
+
+function startMatch(tournament: Tournament, matchId: string) {
+  const openTable = getOpenTable(tournament.matches);
+  if (!openTable) return tournament;
+
+  const matches = tournament.matches.map((m) =>
+    m.id === matchId ? { ...m, status: "inProgress" as const, tableNumber: openTable } : { ...m }
+  );
+
+  return { ...tournament, matches: applyQueue(matches) };
+}
+
+function finishMatch(tournament: Tournament, matchId: string, winnerId: string) {
+  const matches = tournament.matches.map((m) => {
+    if (m.id !== matchId) return { ...m };
+    return {
+      ...m,
+      winnerId,
+      status: "finished" as const,
+      tableNumber: null,
+    };
+  });
+
+  const propagated = propagateWinners(matches);
+  const queued = applyQueue(propagated);
+  const finalMatch = queued[queued.length - 1];
+  const status = finalMatch?.status === "finished" ? "finished" : tournament.status;
+  return { ...tournament, matches: queued, status };
+}
+
+function renamePlayer(tournament: Tournament, oldName: string, newName: string): { tournament: Tournament; message: string } {
+  const from = oldName.trim();
+  const to = newName.trim();
+  if (!from || !to) return { tournament, message: "Enter both current and replacement names." };
+  const idx = tournament.players.findIndex((p) => p.name.toLowerCase() === from.toLowerCase());
+  if (idx === -1) return { tournament, message: "Could not find that current player/team name." };
+  const players = tournament.players.map((p, i) => (i === idx ? { ...p, name: to } : p));
+  return { tournament: { ...tournament, players }, message: `${from} is now ${to}.` };
+}
+
+function addLatePlayerToBracket(
+  tournament: Tournament,
+  playerNameInput: string,
+  mode: LateEntryMode
+): { tournament: Tournament; message: string } {
+  const trimmed = playerNameInput.trim();
+  if (!trimmed) return { tournament, message: "Enter a player or team name first." };
+  if (tournament.settings.teamMode === "doubles" && !trimmed.includes("/")) {
+    return { tournament, message: "For doubles, enter a team like ‘Alex / Chris’." };
+  }
+
+  const newPlayer: Player = {
+    id: uid(),
+    name: trimmed,
+    seed: tournament.players.length + 1,
+    isLate: true,
+  };
+
+  const matches = tournament.matches.map((m) => ({ ...m }));
+
+  const exactBye = matches.find(
+    (m) =>
+      m.round === 1 &&
+      m.status !== "inProgress" &&
+      m.status !== "finished" &&
+      ((m.player1Id && !m.player2Id) || (!m.player1Id && m.player2Id))
+  );
+
+  if (mode === "bye" && exactBye) {
+    if (!exactBye.player1Id) exactBye.player1Id = newPlayer.id;
+    else exactBye.player2Id = newPlayer.id;
+    exactBye.winnerId = null;
+    const rebuilt = applyQueue(propagateWinners(matches));
+    return {
+      tournament: { ...tournament, players: [...tournament.players, newPlayer], matches: rebuilt },
+      message: `${trimmed} inserted into an open bye slot.`,
+    };
+  }
+
+  const unstartedFullRoundOne = matches.find(
+    (m) => m.round === 1 && m.status === "waiting" && m.player1Id && m.player2Id
+  );
+
+  if (mode === "replace-bye-player" && unstartedFullRoundOne && tournament.settings.teamMode === "singles") {
+    const replacedId = unstartedFullRoundOne.player2Id;
+    unstartedFullRoundOne.player2Id = newPlayer.id;
+    unstartedFullRoundOne.winnerId = null;
+    const players = [...tournament.players, newPlayer].filter((p) => p.id !== replacedId);
+    const rebuilt = applyQueue(propagateWinners(matches));
+    return {
+      tournament: { ...tournament, players, matches: rebuilt },
+      message: `${trimmed} replaced ${playerName(tournament.players, replacedId)} in an unstarted match.`,
+    };
+  }
+
+  const openMatch = matches.find(
+    (m) =>
+      m.round === 1 &&
+      m.status !== "inProgress" &&
+      m.status !== "finished" &&
+      (!m.player1Id || !m.player2Id)
+  );
+
+  if (mode === "unstarted" && openMatch) {
+    if (!openMatch.player1Id) openMatch.player1Id = newPlayer.id;
+    else openMatch.player2Id = newPlayer.id;
+    openMatch.winnerId = null;
+    const rebuilt = applyQueue(propagateWinners(matches));
+    return {
+      tournament: { ...tournament, players: [...tournament.players, newPlayer], matches: rebuilt },
+      message: `${trimmed} added to an unstarted round-1 match.`,
+    };
+  }
+
+  return {
+    tournament,
+    message: "No clean late-entry move was available. Try replace mode, or edit the bracket setup directly.",
+  };
+}
+
+
+type LeaderboardRow = {
+  playerId: string;
+  name: string;
+  wins: number;
+  losses: number;
+  active: boolean;
+  placementLabel: string;
+  progressRound: number;
+};
+
+function getPlacementLabel(tournament: Tournament, playerId: string) {
+  const finalMatch = tournament.matches[tournament.matches.length - 1];
+  if (!finalMatch) return "—";
+  if (finalMatch.winnerId === playerId) return "1st";
+  if (finalMatch.status === "finished" && (finalMatch.player1Id === playerId || finalMatch.player2Id === playerId)) return "2nd";
+
+  const semifinalLosers = tournament.matches
+    .filter((m) => m.round === Math.max(finalMatch.round - 1, 1) && m.status === "finished" && m.winnerId)
+    .flatMap((m) => [m.player1Id, m.player2Id].filter((id): id is string => Boolean(id && id !== m.winnerId)));
+
+  if (semifinalLosers.includes(playerId)) return "T-3rd";
+
+  const quarterRound = Math.max(finalMatch.round - 2, 1);
+  const quarterLosers = tournament.matches
+    .filter((m) => m.round === quarterRound && m.status === "finished" && m.winnerId)
+    .flatMap((m) => [m.player1Id, m.player2Id].filter((id): id is string => Boolean(id && id !== m.winnerId)));
+
+  if (quarterLosers.includes(playerId) && finalMatch.round >= 3) return "T-5th";
+  return "—";
+}
+
+function buildLeaderboard(tournament: Tournament): LeaderboardRow[] {
+  return tournament.players
+    .map((player) => {
+      let wins = 0;
+      let losses = 0;
+      let progressRound = 0;
+
+      for (const match of tournament.matches) {
+        const involved = match.player1Id === player.id || match.player2Id === player.id;
+        if (!involved) continue;
+        progressRound = Math.max(progressRound, match.round);
+        if (match.status === "finished" && match.winnerId) {
+          if (match.winnerId === player.id) wins += 1;
+          else losses += 1;
+        }
+      }
+
+      const active =
+        tournament.status !== "finished" &&
+        tournament.matches.some(
+          (match) =>
+            match.status !== "finished" &&
+            (match.player1Id === player.id || match.player2Id === player.id || match.winnerId === player.id)
+        );
+
+      return {
+        playerId: player.id,
+        name: player.name,
+        wins,
+        losses,
+        active,
+        placementLabel: getPlacementLabel(tournament, player.id),
+        progressRound,
+      };
+    })
+    .sort((a, b) => {
+      if (a.wins !== b.wins) return b.wins - a.wins;
+      if (a.losses !== b.losses) return a.losses - b.losses;
+      if (a.progressRound !== b.progressRound) return b.progressRound - a.progressRound;
+      return a.name.localeCompare(b.name);
+    });
+}
+
+function shuffleArray<T>(items: T[]) {
+  const copy = [...items];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
+}
+
+function normalizeNameKey(name: string) {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+type RatingEntry = {
+  aliases: string[];
+  keys: string[];
+  rating: number;
+};
+
+function parseRatingEntries(rawText: string) {
+  return rawText
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      let namePart = "";
+      let ratingPart = "";
+
+      if (/\s+-\s+[-]?\d/.test(line)) {
+        const parts = line.split(/\s+-\s+/);
+        if (parts.length >= 2) {
+          namePart = parts[0];
+          ratingPart = parts.slice(1).join("-");
+        }
+      }
+
+      if (!namePart) {
+        const parts = line.split(/\s*(?:=|:|,|\t)\s*/);
+        if (parts.length >= 2) {
+          namePart = parts[0];
+          ratingPart = parts[1];
+        }
+      }
+
+      const rating = Number.parseFloat(ratingPart);
+      if (!namePart || Number.isNaN(rating)) return null;
+
+      const aliases = namePart
+        .split("|")
+        .map((part) => part.trim())
+        .filter(Boolean);
+
+      if (aliases.length === 0) return null;
+
+      return {
+        aliases,
+        keys: aliases.map((alias) => normalizeNameKey(alias)),
+        rating,
+      } as RatingEntry;
+    })
+    .filter((entry): entry is RatingEntry => Boolean(entry));
+}
+
+function lookupPlayerRating(name: string, entries: RatingEntry[], fallbackRating: number) {
+  const key = normalizeNameKey(name);
+  for (const entry of entries) {
+    if (entry.keys.includes(key)) return entry.rating;
+  }
+
+  for (const entry of entries) {
+    if (entry.keys.some((aliasKey) => aliasKey.includes(key) || key.includes(aliasKey) || aliasKey.startsWith(key) || key.startsWith(aliasKey))) {
+      return entry.rating;
+    }
+  }
+
+  return fallbackRating;
+}
+
+function getConfiguredRatingSummary(ratingsText: string) {
+  const entries = parseRatingEntries(ratingsText);
+  const uniquePrimaryNames = new Set(
+    entries.map((entry) => normalizeNameKey(entry.aliases[0] ?? "")).filter(Boolean)
+  );
+  const aliasCount = entries.reduce((sum, entry) => sum + Math.max(entry.aliases.length - 1, 0), 0);
+  return {
+    playerCount: uniquePrimaryNames.size,
+    aliasCount,
+  };
+}
+
+function buildBalancedRandomTeams(playerText: string, ratingsText: string, lockedTeamsText = "") {
+  const rawPlayers = playerText
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (rawPlayers.length < 2) {
+    return { teams: [] as string[], teamText: "", message: "Enter at least 2 player names first.", sitOut: "" };
+  }
+
+  const ratingEntries = parseRatingEntries(ratingsText);
+  const knownRatings = ratingEntries.map((entry) => entry.rating);
+  const fallbackRating = knownRatings.length > 0 ? knownRatings.reduce((sum, rating) => sum + rating, 0) / knownRatings.length : 5;
+
+  const basePlayers = rawPlayers.map((name) => ({
+    name,
+    rating: lookupPlayerRating(name, ratingEntries, fallbackRating),
+  }));
+
+  const availableByKey = new Map(basePlayers.map((player) => [normalizeNameKey(player.name), player]));
+  const lockedTeams = lockedTeamsText
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.split("/").map((part) => part.trim()).filter(Boolean))
+    .filter((parts) => parts.length === 2)
+    .map(([aName, bName]) => {
+      const a = availableByKey.get(normalizeNameKey(aName));
+      const b = availableByKey.get(normalizeNameKey(bName));
+      return a && b && a.name !== b.name ? [a, b] as const : null;
+    })
+    .filter((team): team is readonly [{ name: string; rating: number }, { name: string; rating: number }] => Boolean(team));
+
+  const lockedPlayerKeys = new Set(lockedTeams.flatMap((team) => team.map((player) => normalizeNameKey(player.name))));
+  let workingPlayers = basePlayers.filter((player) => !lockedPlayerKeys.has(normalizeNameKey(player.name)));
+  let sitOut = "";
+
+  if (workingPlayers.length % 2 === 1) {
+    const sortedForSitOut = [...workingPlayers].sort((a, b) => a.rating - b.rating);
+    const sitOutPool = sortedForSitOut.slice(0, Math.max(1, Math.ceil(sortedForSitOut.length / 2)));
+    sitOut = sitOutPool[Math.floor(Math.random() * sitOutPool.length)].name;
+    workingPlayers = workingPlayers.filter((player) => player.name !== sitOut);
+  }
+
+  const teamCount = Math.floor(workingPlayers.length / 2);
+  const candidates: { teams: { name: string; rating: number }[][]; score: number }[] = [];
+
+  for (let attempt = 0; attempt < 400; attempt++) {
+    const noisySorted = shuffleArray(workingPlayers)
+      .map((player) => ({
+        ...player,
+        noisyRating: player.rating + (Math.random() - 0.5) * 1.35,
+      }))
+      .sort((a, b) => b.noisyRating - a.noisyRating);
+
+    const teams = lockedTeams.map((team) => [...team]);
+    while (teams.length < lockedTeams.length + teamCount) teams.push([] as { name: string; rating: number }[]);
+    const teamSums = teams.map((team) => team.reduce((sum, player) => sum + player.rating, 0));
+
+    for (const player of noisySorted) {
+      const availableIndexes = teams
+        .map((team, index) => ({ index, size: team.length, sum: teamSums[index] }))
+        .filter((team) => team.size < 2)
+        .sort((a, b) => {
+          if (a.size !== b.size) return a.size - b.size;
+          return a.sum - b.sum;
+        });
+
+      const choicePool = availableIndexes.slice(0, Math.min(2, availableIndexes.length));
+      const chosen = choicePool[Math.floor(Math.random() * choicePool.length)]?.index ?? availableIndexes[0].index;
+      teams[chosen].push({ name: player.name, rating: player.rating });
+      teamSums[chosen] += player.rating;
+    }
+
+    const completedTeams = teams.filter((team) => team.length === 2);
+    const completedSums = completedTeams.map((team) => team.reduce((sum, player) => sum + player.rating, 0));
+    const mean = completedSums.reduce((sum, rating) => sum + rating, 0) / Math.max(completedSums.length, 1);
+    const spread = completedSums.reduce((sum, rating) => sum + (rating - mean) ** 2, 0) / Math.max(completedSums.length, 1);
+    const teammateGaps = completedTeams.map((team) => Math.abs((team[0]?.rating ?? 0) - (team[1]?.rating ?? 0)));
+    const internalMismatch = teammateGaps.reduce((sum, gap) => sum + gap, 0);
+    const softGapPenalty = teammateGaps.reduce((sum, gap) => sum + Math.max(0, gap - 3) ** 2, 0);
+    const extremeGapPenalty = teammateGaps.reduce((sum, gap) => sum + (gap >= 5 ? 6 + (gap - 5) * 2.5 : 0), 0);
+    const lockedGapPenalty = lockedTeams.reduce((sum, team) => sum + Math.max(0, Math.abs(team[0].rating - team[1].rating) - 4), 0);
+    const score = spread * 4 + internalMismatch * 0.35 + softGapPenalty * 1.2 + extremeGapPenalty + lockedGapPenalty * 0.35 + Math.random() * 0.45;
+
+    candidates.push({ teams: completedTeams, score });
+  }
+
+  candidates.sort((a, b) => a.score - b.score);
+  const finalistPool = candidates.slice(0, Math.min(12, candidates.length));
+  const chosen = finalistPool[Math.floor(Math.random() * finalistPool.length)] ?? candidates[0];
+
+  const orderedTeams = (chosen?.teams ?? [])
+    .map((team) => ({
+      players: [...team].sort((a, b) => b.rating - a.rating),
+      total: team.reduce((sum, player) => sum + player.rating, 0),
+    }))
+    .sort((a, b) => b.total - a.total);
+
+  const teams = orderedTeams.map((team) => `${team.players[0]?.name ?? "TBD"} / ${team.players[1]?.name ?? "TBD"}`);
+
+  const knownCount = basePlayers.filter((player) => {
+    const key = normalizeNameKey(player.name);
+    return ratingEntries.some((entry) => entry.keys.some((aliasKey) => aliasKey === key || aliasKey.includes(key) || key.includes(aliasKey) || aliasKey.startsWith(key) || key.startsWith(aliasKey)));
+  }).length;
+  const unratedCount = basePlayers.length - knownCount;
+  const sitOutMessage = sitOut ? ` ${sitOut} sits this draw out.` : "";
+  const unratedMessage = unratedCount > 0 ? ` ${unratedCount} player${unratedCount === 1 ? "" : "s"} used the fallback rating.` : "";
+  const lockedMessage = lockedTeams.length > 0 ? ` ${lockedTeams.length} locked team${lockedTeams.length === 1 ? "" : "s"} preserved.` : "";
+
+  return {
+    teams,
+    teamText: teams.join("\n"),
+    message: `Generated ${teams.length} balanced random team${teams.length === 1 ? "" : "s"}.${lockedMessage}${sitOutMessage}${unratedMessage}`.trim(),
+    sitOut,
+  };
+}
+
+
+function loadClubStats(): ClubStatsMap {
+  try {
+    const raw = localStorage.getItem(CLUB_STATS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return typeof parsed === "object" && parsed ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveClubStats(stats: ClubStatsMap) {
+  localStorage.setItem(CLUB_STATS_KEY, JSON.stringify(stats));
+}
+
+function clubStatsNameKey(name: string) {
+  return normalizeNameKey(name);
+}
+
+function tournamentSummaryText(tournament: Tournament, clubStats?: ClubStatsMap) {
+  const leaderboard = buildLeaderboard(tournament);
+  const championId = tournament.matches[tournament.matches.length - 1]?.winnerId ?? null;
+  const lines = [
+    `${tournament.name}`,
+    `${new Date(tournament.createdAt).toLocaleString()}`,
+    `${tournament.settings.gameType} · ${tournament.settings.teamMode} · ${tournament.settings.bracketType}`,
+    "",
+    championId ? `Champion: ${playerName(tournament.players, championId)}` : "Champion: TBD",
+    "",
+    "Final standings:",
+    ...leaderboard.map((row, index) => {
+      const career = clubStats?.[clubStatsNameKey(row.name)];
+      const careerText = career ? ` | career match wins ${career.totalMatchWins}, titles ${career.tournamentWins}` : "";
+      return `${index + 1}. ${row.name} | wins ${row.wins} | losses ${row.losses} | place ${row.placementLabel}${careerText}`;
+    }),
+    "",
+    "Completed matches:",
+    ...tournament.matches
+      .filter((match) => match.status === "finished")
+      .map((match) => `${match.id.toUpperCase()}: ${playerName(tournament.players, match.player1Id)} vs ${playerName(tournament.players, match.player2Id)} — winner ${playerName(tournament.players, match.winnerId)}`),
+  ];
+  return lines.join("\n");
+}
+
+function applyTournamentToClubStats(tournament: Tournament, existingStats: ClubStatsMap): ClubStatsMap {
+  const next = JSON.parse(JSON.stringify(existingStats || {})) as ClubStatsMap;
+  const finalMatch = tournament.matches[tournament.matches.length - 1];
+  const championId = finalMatch?.winnerId ?? null;
+  const runnerUpId = finalMatch && finalMatch.status === "finished"
+    ? [finalMatch.player1Id, finalMatch.player2Id].find((id) => id && id !== finalMatch.winnerId) ?? null
+    : null;
+
+  for (const player of tournament.players) {
+    const key = clubStatsNameKey(player.name);
+    if (!next[key]) {
+      next[key] = {
+        name: player.name,
+        totalMatchWins: 0,
+        tournamentWins: 0,
+        runnerUpFinishes: 0,
+        tournamentsPlayed: 0,
+      };
+    }
+    next[key].name = player.name;
+    next[key].tournamentsPlayed += 1;
+  }
+
+  for (const match of tournament.matches) {
+    if (match.status !== "finished" || !match.winnerId) continue;
+    const winner = tournament.players.find((player) => player.id === match.winnerId);
+    if (!winner) continue;
+    const key = clubStatsNameKey(winner.name);
+    if (!next[key]) continue;
+    next[key].totalMatchWins += 1;
+  }
+
+  if (championId) {
+    const champion = tournament.players.find((player) => player.id === championId);
+    if (champion) next[clubStatsNameKey(champion.name)].tournamentWins += 1;
+  }
+
+  if (runnerUpId) {
+    const runner = tournament.players.find((player) => player.id === runnerUpId);
+    if (runner) next[clubStatsNameKey(runner.name)].runnerUpFinishes += 1;
+  }
+
+  return next;
+}
+function saveTournamentLocal(tournament: Tournament) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(tournament));
+}
+
+function loadTournamentLocal() {
+  const raw = localStorage.getItem(STORAGE_KEY);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<Tournament>;
+    if (!parsed || !Array.isArray(parsed.players) || !Array.isArray(parsed.matches) || !parsed.settings) return null;
+    return parsed as Tournament;
+  } catch {
+    return null;
+  }
+}
+
+function Pill({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+  return <span className={`rounded-full px-3 py-1 text-xs font-semibold ${className}`}>{children}</span>;
+}
+
+function Panel({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+  return <div className={`rounded-3xl border border-emerald-300/10 bg-black/35 p-5 shadow-[0_0_0_1px_rgba(52,211,153,0.05)] backdrop-blur ${className}`}>{children}</div>;
+}
+
+function StatusPill({ status }: { status: MatchStatus }) {
+  const classes =
+    status === "nextUp"
+      ? "bg-emerald-400 text-black"
+      : status === "onDeck"
+      ? "bg-cyan-300 text-black"
+      : status === "inProgress"
+      ? "bg-amber-300 text-black"
+      : status === "finished"
+      ? "bg-slate-600 text-white"
+      : "bg-slate-700 text-white";
+
+  const label =
+    status === "nextUp"
+      ? "Next Up"
+      : status === "onDeck"
+      ? "On Deck"
+      : status === "inProgress"
+      ? "In Progress"
+      : status === "finished"
+      ? "Finished"
+      : "Waiting";
+
+  return <Pill className={classes}>{label}</Pill>;
+}
+
+function ConfettiOverlay({ show }: { show: boolean }) {
+  const pieces = Array.from({ length: 30 }, (_, i) => i);
+  if (!show) return null;
+
+  return (
+    <div className="pointer-events-none fixed inset-0 overflow-hidden">
+      {pieces.map((piece) => (
+        <div
+          key={piece}
+          className="absolute top-[-10%] h-3 w-2 animate-[confetti_3s_ease-in_forwards] rounded-sm"
+          style={{
+            left: `${(piece * 97) % 100}%`,
+            backgroundColor: ["#34d399", "#67e8f9", "#fbbf24", "#ffffff"][piece % 4],
+            transform: `rotate(${piece * 19}deg)`,
+            animationDelay: `${(piece % 10) * 0.08}s`,
+          }}
+        />
+      ))}
+      <style>{`@keyframes confetti {0% {transform: translateY(0) rotate(0deg); opacity:1;} 100% {transform: translateY(120vh) rotate(540deg); opacity:0;}}`}</style>
+    </div>
+  );
+}
+
+function MatchCard({
+  tournament,
+  match,
+  admin,
+  onStart,
+  onFinish,
+}: {
+  tournament: Tournament;
+  match: Match;
+  admin: boolean;
+  onStart: (matchId: string) => void;
+  onFinish: (matchId: string, winnerId: string) => void;
+}) {
+  const p1 = playerName(tournament.players, match.player1Id);
+  const p2 = playerName(tournament.players, match.player2Id);
+  const openTable = getOpenTable(tournament.matches);
+
+  return (
+    <div className="rounded-2xl border border-emerald-300/10 bg-white/5 p-4 transition-transform duration-150 hover:-translate-y-1 hover:border-emerald-300/30">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <div>
+          <div className="text-sm text-slate-400">{match.id.toUpperCase()}</div>
+          <div className="text-xs text-slate-500">Round {match.round} · Single game match</div>
+        </div>
+        <div className="flex items-center gap-2">
+          {match.tableNumber ? <Pill className="bg-amber-300 text-black">Table {match.tableNumber}</Pill> : null}
+          <StatusPill status={match.status} />
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <div className={`rounded-xl px-3 py-2 ${match.winnerId === match.player1Id && match.winnerId ? "bg-emerald-500/15 text-emerald-200" : "bg-black/25"}`}>
+          {p1}
+        </div>
+        <div className={`rounded-xl px-3 py-2 ${match.winnerId === match.player2Id && match.winnerId ? "bg-emerald-500/15 text-emerald-200" : "bg-black/25"}`}>
+          {p2}
+        </div>
+      </div>
+
+      {admin ? (
+        <div className="mt-4 flex flex-wrap gap-2">
+          {(match.status === "nextUp" || match.status === "onDeck") && openTable ? (
+            <button
+              onClick={() => onStart(match.id)}
+              className="rounded-xl bg-emerald-400 px-4 py-2 text-sm font-semibold text-black transition-transform duration-150 hover:-translate-y-0.5 hover:bg-emerald-300"
+            >
+              <Play className="mr-2 inline h-4 w-4" /> Start on Table {openTable}
+            </button>
+          ) : null}
+
+          {match.status === "inProgress" && match.player1Id ? (
+            <button
+              onClick={() => onFinish(match.id, match.player1Id as string)}
+              className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black transition-transform duration-150 hover:-translate-y-0.5 hover:bg-slate-100"
+            >
+              <CheckCircle2 className="mr-2 inline h-4 w-4" /> {p1} wins
+            </button>
+          ) : null}
+
+          {match.status === "inProgress" && match.player2Id ? (
+            <button
+              onClick={() => onFinish(match.id, match.player2Id as string)}
+              className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black transition-transform duration-150 hover:-translate-y-0.5 hover:bg-slate-100"
+            >
+              <CheckCircle2 className="mr-2 inline h-4 w-4" /> {p2} wins
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+
+function BracketGraphic({ tournament, compact = false, animatedMatchIds = [] }: { tournament: Tournament; compact?: boolean; animatedMatchIds?: string[] }) {
+  const roundMap = new Map<number, Match[]>();
+  for (const match of tournament.matches) {
+    const arr = roundMap.get(match.round) ?? [];
+    arr.push(match);
+    roundMap.set(match.round, arr);
+  }
+
+  const orderedRounds = [...roundMap.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([roundNumber, matches]) => [roundNumber, [...matches].sort((a, b) => a.slot - b.slot)] as const);
+
+  if (orderedRounds.length === 0) return null;
+
+  const matchHeight = compact ? 154 : 186;
+  const firstRoundGap = compact ? 38 : 58;
+  const cardWidth = compact ? 290 : 330;
+  const colGap = compact ? 72 : 92;
+  const roundHeaderHeight = 44;
+  const innerPad = 18;
+  const bottomBuffer = compact ? 96 : 128;
+
+  const firstRoundCount = orderedRounds[0][1].length;
+  const firstRoundStep = matchHeight + firstRoundGap;
+  const bodyHeight = Math.max(firstRoundCount * matchHeight + Math.max(firstRoundCount - 1, 0) * firstRoundGap + bottomBuffer, matchHeight + bottomBuffer);
+  const totalHeight = roundHeaderHeight + innerPad + bodyHeight + innerPad * 2;
+  const totalWidth = orderedRounds.length * cardWidth + Math.max(orderedRounds.length - 1, 0) * colGap + innerPad * 2;
+
+  const centersByMatch = new Map<string, number>();
+  const topsByMatch = new Map<string, number>();
+
+  orderedRounds.forEach(([_, matches], roundIndex) => {
+    matches.forEach((match, index) => {
+      let centerY = 0;
+      if (roundIndex === 0) {
+        centerY = roundHeaderHeight + innerPad + index * firstRoundStep + matchHeight / 2;
+      } else {
+        const prevA = tournament.matches.find((m) => m.round === match.round - 1 && m.slot === match.slot * 2);
+        const prevB = tournament.matches.find((m) => m.round === match.round - 1 && m.slot === match.slot * 2 + 1);
+        const fallbackTop = roundHeaderHeight + innerPad + index * firstRoundStep;
+        const aCenter = prevA ? centersByMatch.get(prevA.id) : undefined;
+        const bCenter = prevB ? centersByMatch.get(prevB.id) : undefined;
+        if (typeof aCenter === "number" && typeof bCenter === "number") {
+          centerY = (aCenter + bCenter) / 2;
+        } else if (typeof aCenter === "number") {
+          centerY = aCenter;
+        } else if (typeof bCenter === "number") {
+          centerY = bCenter;
+        } else {
+          centerY = fallbackTop + matchHeight / 2;
+        }
+      }
+      centersByMatch.set(match.id, centerY);
+      topsByMatch.set(match.id, centerY - matchHeight / 2);
+    });
+  });
+
+  return (
+    <div className="w-full overflow-x-auto overflow-y-visible rounded-3xl border border-emerald-300/10 bg-black/20 p-3 pb-8">
+      <div
+        className="relative min-w-full overflow-visible"
+        style={{
+          width: `${Math.max(totalWidth, 760)}px`,
+          height: `${totalHeight}px`,
+          minHeight: `${totalHeight}px`,
+          paddingBottom: `${innerPad}px`,
+        }}
+      >
+        <svg
+          className="pointer-events-none absolute left-0 top-0"
+          width={Math.max(totalWidth, 760)}
+          height={totalHeight}
+          viewBox={`0 0 ${Math.max(totalWidth, 760)} ${totalHeight}`}
+          fill="none"
+        >
+          {orderedRounds.slice(0, -1).flatMap(([_, matches], roundIndex) =>
+            matches.map((match) => {
+              const fromCenterY = centersByMatch.get(match.id) ?? 0;
+              const fromX = innerPad + roundIndex * (cardWidth + colGap) + cardWidth;
+              const elbowX = fromX + colGap / 2;
+              const nextMatch = tournament.matches.find((m) => m.round === match.round + 1 && m.slot === Math.floor(match.slot / 2));
+              const toCenterY = nextMatch ? centersByMatch.get(nextMatch.id) ?? fromCenterY : fromCenterY;
+
+              return (
+                <g key={`${match.id}-connector`} stroke="rgba(110, 231, 183, 0.32)" strokeWidth="1.5" strokeLinecap="round">
+                  <line x1={fromX} y1={fromCenterY} x2={elbowX} y2={fromCenterY} />
+                  <line x1={elbowX} y1={fromCenterY} x2={elbowX} y2={toCenterY} />
+                  <line x1={elbowX} y1={toCenterY} x2={fromX + colGap} y2={toCenterY} />
+                </g>
+              );
+            })
+          )}
+        </svg>
+
+        {orderedRounds.map(([roundNumber, matches], roundIndex) => {
+          const columnLeft = innerPad + roundIndex * (cardWidth + colGap);
+          return (
+            <div key={roundNumber} className="absolute top-0" style={{ left: `${columnLeft}px`, width: `${cardWidth}px` }}>
+              <div className="mb-3 h-11 text-center text-sm font-semibold uppercase tracking-[0.24em] text-emerald-200/90">
+                {matches.length === 1 ? "Final" : matches.length === 2 ? "Semifinal" : `Round ${roundNumber}`}
+              </div>
+
+              {matches.map((match) => {
+                const top = topsByMatch.get(match.id) ?? roundHeaderHeight + innerPad;
+                const winner1 = match.winnerId === match.player1Id && match.winnerId;
+                const winner2 = match.winnerId === match.player2Id && match.winnerId;
+
+                return (
+                  <div
+                    key={match.id}
+                    className="absolute left-0"
+                    style={{ top: `${top}px`, width: `${cardWidth}px`, height: `${matchHeight}px` }}
+                  >
+                    <div className={`flex h-full flex-col rounded-[22px] border border-emerald-300/10 bg-[#081325]/95 px-3 pb-4 pt-2.5 shadow-[0_12px_30px_rgba(0,0,0,0.28)] overflow-visible transition-all duration-300 ${animatedMatchIds.includes(match.id) ? "animate-[queueSlide_0.42s_ease-out]" : ""}`}>
+                      <div className="mb-2 flex items-center justify-between gap-2 text-xs text-slate-400">
+                        <span>{match.id.toUpperCase()}</span>
+                        <StatusPill status={match.status} />
+                      </div>
+                      <div className="mt-1 flex-1 space-y-2 text-[15px] min-h-0">
+                        <div className={`truncate rounded-xl px-4 py-3 ${winner1 ? "bg-emerald-500/18 text-emerald-100 ring-1 ring-emerald-300/20" : "bg-white/[0.06]"}`}>
+                          {playerName(tournament.players, match.player1Id)}
+                        </div>
+                        <div className={`truncate rounded-xl px-4 py-3 ${winner2 ? "bg-emerald-500/18 text-emerald-100 ring-1 ring-emerald-300/20" : "bg-white/[0.06]"}`}>
+                          {playerName(tournament.players, match.player2Id)}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function LeaderboardTable({ tournament, clubStats = {} }: { tournament: Tournament; clubStats?: ClubStatsMap }) {
+  const rows = useMemo(() => buildLeaderboard(tournament), [tournament]);
+
+  return (
+    <div className="overflow-hidden rounded-3xl border border-emerald-300/10 bg-black/20">
+      <div className="grid grid-cols-[minmax(0,1.7fr)_80px_80px_100px_92px_92px_100px] gap-3 border-b border-white/10 px-4 py-3 text-xs uppercase tracking-[0.18em] text-slate-400">
+        <div>Player</div>
+        <div>Wins</div>
+        <div>Losses</div>
+        <div>Career Wins</div>
+        <div>Titles</div>
+        <div>Status</div>
+        <div>Place</div>
+      </div>
+      <div className="divide-y divide-white/5">
+        {rows.map((row, index) => {
+          const career = clubStats[clubStatsNameKey(row.name)];
+          return (
+            <div key={row.playerId} className="grid grid-cols-[minmax(0,1.7fr)_80px_80px_100px_92px_92px_100px] items-center gap-3 px-4 py-3 text-sm">
+              <div className="min-w-0">
+                <div className="truncate font-semibold text-white">{index === 0 ? "🥇 " : index === 1 ? "🥈 " : index === 2 ? "🥉 " : ""}{row.name}</div>
+              </div>
+              <div>{row.wins}</div>
+              <div>{row.losses}</div>
+              <div>{career?.totalMatchWins ?? 0}</div>
+              <div>{career?.tournamentWins ?? 0}</div>
+              <div>{row.active ? <Pill className="bg-emerald-400 text-black">Active</Pill> : <Pill className="bg-white/10 text-white">Out</Pill>}</div>
+              <div className="text-slate-300">{row.placementLabel}</div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function PublicBracketView({ tournament, clubStats = {} }: { tournament: Tournament; clubStats?: ClubStatsMap }) {
+  const [publicTab, setPublicTab] = useState<"board" | "leaderboard">("board");
+  const nextUp = tournament.matches.find((m) => m.status === "nextUp");
+  const onDeck = tournament.matches.find((m) => m.status === "onDeck");
+  const championId = tournament.matches[tournament.matches.length - 1]?.winnerId ?? null;
+  const champion = championId ? playerName(tournament.players, championId) : "";
+  const publicUrl = typeof window !== "undefined" ? `${window.location.origin}${window.location.pathname}#public` : "#public";
+  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(publicUrl)}`;
+
+  return (
+    <div className="space-y-6">
+      <Panel className="border-emerald-300/15 bg-black/40">
+        <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+          <div>
+            <div className="text-xs uppercase tracking-[0.24em] text-emerald-200/80">Public Tournament Board</div>
+            <div className="mt-2 text-3xl font-bold">{tournament.name}</div>
+            <div className="mt-1 text-sm text-slate-300">{tournament.settings.gameType} · {tournament.settings.teamMode} · {tournament.settings.bracketType}</div>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="rounded-2xl bg-emerald-500/10 px-4 py-3">
+              <div className="text-xs uppercase tracking-[0.18em] text-emerald-200/80">Next Up</div>
+              <div className="mt-1 text-xl font-semibold">{nextUp ? `${playerName(tournament.players, nextUp.player1Id)} vs ${playerName(tournament.players, nextUp.player2Id)}` : "Waiting..."}</div>
+            </div>
+            <div className="rounded-2xl bg-cyan-500/10 px-4 py-3">
+              <div className="text-xs uppercase tracking-[0.18em] text-cyan-200/80">On Deck</div>
+              <div className="mt-1 text-xl font-semibold">{onDeck ? `${playerName(tournament.players, onDeck.player1Id)} vs ${playerName(tournament.players, onDeck.player2Id)}` : "Waiting..."}</div>
+            </div>
+          </div>
+        </div>
+        {champion ? (
+          <div className="mt-4 rounded-2xl bg-emerald-500/12 px-4 py-3 text-emerald-100">
+            <div className="text-xs uppercase tracking-[0.18em] text-emerald-200/80">Current Champion</div>
+            <div className="mt-1 text-2xl font-bold">{champion}</div>
+          </div>
+        ) : null}
+      </Panel>
+
+      <Panel className="border-white/10 bg-black/35">
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div>
+            <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Share Public View</div>
+            <div className="mt-2 text-sm text-slate-300 break-all">{publicUrl}</div>
+          </div>
+          <div className="flex items-center gap-4">
+            <img src={qrUrl} alt="QR code for public bracket view" className="h-24 w-24 rounded-2xl border border-white/10 bg-white p-2" />
+          </div>
+        </div>
+      </Panel>
+
+      <Panel>
+        <div className="mb-4 flex flex-wrap gap-3">
+          <button onClick={() => setPublicTab("board")} className={`rounded-2xl px-4 py-2 font-semibold transition-transform duration-150 hover:-translate-y-0.5 ${publicTab === "board" ? "bg-cyan-300 text-black" : "bg-white/10 text-white"}`}>Bracket</button>
+          <button onClick={() => setPublicTab("leaderboard")} className={`rounded-2xl px-4 py-2 font-semibold transition-transform duration-150 hover:-translate-y-0.5 ${publicTab === "leaderboard" ? "bg-amber-300 text-black" : "bg-white/10 text-white"}`}>Leaderboard</button>
+        </div>
+        {publicTab === "board" ? (
+          <>
+            <div className="mb-3 text-sm uppercase tracking-[0.2em] text-slate-400">Bracket</div>
+            <BracketGraphic tournament={tournament} compact={false} />
+          </>
+        ) : (
+          <>
+            <div className="mb-3 text-sm uppercase tracking-[0.2em] text-slate-400">Leaderboard</div>
+            <LeaderboardTable tournament={tournament} clubStats={clubStats} />
+          </>
+        )}
+      </Panel>
+    </div>
+  );
+}
+
+export default function BilliardsTournamentManager() {
+  const [mode, setMode] = useState<ViewMode>(window.location.hash.includes("public") ? "public" : "admin");
+  const [adminTab, setAdminTab] = useState<AdminTab>("dashboard");
+  const [name, setName] = useState(DEFAULT_TOURNAMENT_NAME);
+  const [playerText, setPlayerText] = useState(DEFAULT_PLAYER_LIST);
+  const [gameType, setGameType] = useState<GameType>("8-ball");
+  const [teamMode, setTeamMode] = useState<TeamMode>("singles");
+  const [bracketType, setBracketType] = useState<BracketType>("single-elim");
+  const [tournament, setTournament] = useState<Tournament | null>(null);
+  const [history, setHistory] = useState<Tournament[]>([]);
+  const [lateName, setLateName] = useState("");
+  const [lateMode, setLateMode] = useState<LateEntryMode>("bye");
+  const [lateMessage, setLateMessage] = useState("");
+  const [renameFrom, setRenameFrom] = useState("");
+  const [renameTo, setRenameTo] = useState("");
+  const [renameMessage, setRenameMessage] = useState("");
+  const [showConfetti, setShowConfetti] = useState(false);
+  const [teamRatingsText] = useState(CLUB_PLAYER_RATINGS);
+  const [generatedTeamsText, setGeneratedTeamsText] = useState("");
+  const [lockedTeamsText, setLockedTeamsText] = useState("");
+  const [teamMakerMessage, setTeamMakerMessage] = useState("Balanced teams use your ratings when available and fall back to an average rating for anyone unranked.");
+  const [includeInClubStats, setIncludeInClubStats] = useState(false);
+  const [clubStats, setClubStats] = useState<ClubStatsMap>({});
+  const [copiedPublicLink, setCopiedPublicLink] = useState(false);
+  const [animatedMatchIds, setAnimatedMatchIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    const existing = loadTournamentLocal();
+    if (existing) setTournament(existing);
+    setClubStats(loadClubStats());
+  }, []);
+
+  useEffect(() => {
+    if (tournament) saveTournamentLocal(tournament);
+  }, [tournament]);
+
+  useEffect(() => {
+    const onHashChange = () => {
+      setMode(window.location.hash.includes("public") ? "public" : "admin");
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+
+  useEffect(() => {
+    if (tournament?.status === "finished") {
+      setShowConfetti(true);
+      const timer = setTimeout(() => setShowConfetti(false), 4200);
+      return () => clearTimeout(timer);
+    }
+  }, [tournament?.status]);
+  useEffect(() => {
+    if (!tournament) return;
+    const changed = tournament.matches
+      .filter((match) => match.status === "nextUp" || match.status === "onDeck" || match.status === "inProgress")
+      .map((match) => match.id);
+    setAnimatedMatchIds(changed);
+    const timer = setTimeout(() => setAnimatedMatchIds([]), 850);
+    return () => clearTimeout(timer);
+  }, [tournament]);
+
+  const allMatches = useMemo(() => tournament?.matches ?? [], [tournament]);
+  const nextUp = allMatches.find((m) => m.status === "nextUp");
+  const onDeck = allMatches.find((m) => m.status === "onDeck");
+  const inProgress = allMatches.filter((m) => m.status === "inProgress").sort((a, b) => (a.tableNumber ?? 0) - (b.tableNumber ?? 0));
+  const championId = tournament?.matches[tournament.matches.length - 1]?.winnerId ?? null;
+  const champion = tournament ? playerName(tournament.players, championId) : "";
+  const rounds = useMemo(() => {
+    const grouped = new Map<number, Match[]>();
+    for (const match of allMatches) {
+      const arr = grouped.get(match.round) ?? [];
+      arr.push(match);
+      grouped.set(match.round, arr);
+    }
+    return [...grouped.entries()].sort((a, b) => a[0] - b[0]);
+  }, [allMatches]);
+
+  function pushHistory() {
+    if (tournament) setHistory((prev) => [...prev, JSON.parse(JSON.stringify(tournament))]);
+  }
+
+  function handleGenerateTeams() {
+    const result = buildBalancedRandomTeams(playerText, teamRatingsText, lockedTeamsText);
+    setGeneratedTeamsText(result.teamText);
+    setTeamMakerMessage(result.message);
+  }
+
+  function handleUseGeneratedTeams() {
+    if (!generatedTeamsText.trim()) {
+      setTeamMakerMessage("Generate teams first.");
+      return;
+    }
+    setPlayerText(generatedTeamsText);
+    setTeamMode("doubles");
+    setTeamMakerMessage("Generated teams copied into the tournament field. Mode switched to doubles.");
+  }
+
+  function handleCreateTournament() {
+    const settings: TournamentSettings = { gameType, teamMode, bracketType };
+    setTournament(createTournament(name, playerText, settings, includeInClubStats));
+    setHistory([]);
+    setLateMessage("");
+    setRenameMessage("");
+    window.location.hash = "admin";
+  }
+
+  function handleResetBracket() {
+    const settings: TournamentSettings = { gameType: "8-ball", teamMode: "singles", bracketType: "single-elim" };
+    const fresh = createTournament(DEFAULT_TOURNAMENT_NAME, DEFAULT_PLAYER_LIST, settings);
+    setName(fresh.name);
+    setPlayerText(fresh.players.map((p) => p.name).join("\n"));
+    setGameType(settings.gameType);
+    setTeamMode(settings.teamMode);
+    setBracketType(settings.bracketType);
+    setIncludeInClubStats(false);
+    setTournament(fresh);
+    setHistory([]);
+  }
+
+  function handleBackToSetup() {
+    if (tournament) {
+      setName(tournament.name);
+      setPlayerText(tournament.players.map((p) => p.name).join("\n"));
+      setGameType(tournament.settings.gameType);
+      setTeamMode(tournament.settings.teamMode);
+      setBracketType(tournament.settings.bracketType);
+      setIncludeInClubStats(Boolean(tournament.includeInClubStats));
+    }
+    localStorage.removeItem(STORAGE_KEY);
+    setTournament(null);
+    setLateMessage("");
+    setRenameMessage("");
+  }
+
+  function handleUndo() {
+    if (history.length === 0) return;
+    const prev = history[history.length - 1];
+    setTournament(prev);
+    setHistory((old) => old.slice(0, -1));
+  }
+
+  function handleCopyPublicLink() {
+    const publicUrl = `${window.location.origin}${window.location.pathname}#public`;
+    navigator.clipboard?.writeText(publicUrl);
+    setCopiedPublicLink(true);
+    window.setTimeout(() => setCopiedPublicLink(false), 1400);
+  }
+
+  function handleExportResults() {
+    if (!tournament) return;
+    const summary = tournamentSummaryText(tournament, clubStats);
+    const blob = new Blob([summary], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${tournament.name.replace(/[^a-z0-9]+/gi, "_").toLowerCase() || "tournament"}_results.txt`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
+  }
+
+  function handleSaveTournamentToClubStats() {
+    if (!tournament || !tournament.includeInClubStats || tournament.statsSaved !== false || tournament.status !== "finished") return;
+    const nextStats = applyTournamentToClubStats(tournament, clubStats);
+    saveClubStats(nextStats);
+    setClubStats(nextStats);
+    setTournament({ ...tournament, statsSaved: true });
+  }
+
+  function headerLink(target: ViewMode) {
+    window.location.hash = target;
+    setMode(target);
+  }
+
+  function wrappedStart(matchId: string) {
+    if (!tournament) return;
+    pushHistory();
+    setTournament(startMatch(tournament, matchId));
+  }
+
+  function wrappedFinish(matchId: string, winnerId: string) {
+    if (!tournament) return;
+    pushHistory();
+    setTournament(finishMatch(tournament, matchId, winnerId));
+  }
+
+  function handleLateAdd() {
+    if (!tournament) return;
+    pushHistory();
+    const result = addLatePlayerToBracket(tournament, lateName, lateMode);
+    setTournament(result.tournament);
+    setLateMessage(result.message);
+    if (!result.message.startsWith("No clean") && !result.message.startsWith("For doubles") && !result.message.startsWith("Enter ")) setLateName("");
+  }
+
+  function handleRename() {
+    if (!tournament) return;
+    pushHistory();
+    const result = renamePlayer(tournament, renameFrom, renameTo);
+    setTournament(result.tournament);
+    setRenameMessage(result.message);
+    if (!result.message.startsWith("Could not") && !result.message.startsWith("Enter ")) {
+      setRenameFrom("");
+      setRenameTo("");
+    }
+  }
+
+  const doubleElimNotice = bracketType === "double-elim";
+
+  return (
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top,#123f2f_0%,#071a14_36%,#020617_100%)] p-6 text-white">
+      <ConfettiOverlay show={showConfetti} />
+      <style>{`
+        @keyframes queueSlide {
+          0% { opacity: 0.35; transform: translateY(12px) scale(0.985); }
+          100% { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        @keyframes slowPulse {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.12); transform: scale(1); }
+          50% { box-shadow: 0 0 0 8px rgba(52, 211, 153, 0.03); transform: scale(1.01); }
+        }
+      `}</style>
+      <div className="mx-auto max-w-7xl space-y-6">
+        <Panel className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <div className="mb-2 flex items-center gap-2 text-emerald-300">
+              <Wifi className="h-4 w-4" />
+              <span className="text-xs uppercase tracking-[0.28em]">GitHub Pages + Supabase Ready</span>
+            </div>
+            <h1 className="text-4xl font-bold tracking-tight">Billiards Tournament Manager</h1>
+            <p className="mt-2 text-sm text-slate-300">
+              Shared bracket, two-table queue, late arrival controls, undo, and a public view that stays simple.
+            </p>
+          </div>
+
+          <div className="flex flex-col items-start gap-3 lg:items-end">
+            <div className="flex flex-wrap gap-3">
+              <button onClick={() => headerLink("admin")} className={`rounded-2xl px-4 py-2 font-semibold transition-transform duration-150 hover:-translate-y-0.5 ${mode === "admin" ? "bg-emerald-400 text-black" : "bg-white/10 text-white"}`}>
+                <Shield className="mr-2 inline h-4 w-4" /> Admin View
+              </button>
+              <button onClick={() => headerLink("public")} className={`rounded-2xl px-4 py-2 font-semibold transition-transform duration-150 hover:-translate-y-0.5 ${mode === "public" ? "bg-cyan-300 text-black" : "bg-white/10 text-white"}`}>
+                <Globe className="mr-2 inline h-4 w-4" /> Public View
+              </button>
+              <button onClick={handleBackToSetup} className="rounded-2xl bg-white/10 px-4 py-2 font-semibold text-white transition-transform duration-150 hover:-translate-y-0.5">
+                <ArrowLeft className="mr-2 inline h-4 w-4" /> Back to Setup
+              </button>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <button onClick={handleUndo} disabled={history.length === 0} className="rounded-2xl bg-white/10 px-4 py-2 font-semibold text-white transition-transform duration-150 hover:-translate-y-0.5 disabled:opacity-40">
+                <Undo2 className="mr-2 inline h-4 w-4" /> Undo
+              </button>
+              <button onClick={handleExportResults} disabled={!tournament} className="rounded-2xl bg-white/10 px-4 py-2 font-semibold text-white transition-transform duration-150 hover:-translate-y-0.5 disabled:opacity-40">
+                <Download className="mr-2 inline h-4 w-4" /> Export Results
+              </button>
+              <button onClick={handleCopyPublicLink} disabled={!tournament} className="rounded-2xl bg-white/10 px-4 py-2 font-semibold text-white transition-transform duration-150 hover:-translate-y-0.5 disabled:opacity-40">
+                <QrCode className="mr-2 inline h-4 w-4" /> {copiedPublicLink ? "Copied Public Link" : "Copy Public Link"}
+              </button>
+              <button onClick={handleResetBracket} className="rounded-2xl border border-rose-300/20 bg-rose-400/10 px-4 py-2 font-semibold text-rose-100 transition-transform duration-150 hover:-translate-y-0.5 hover:bg-rose-400/15">
+                <RefreshCw className="mr-2 inline h-4 w-4" /> Reset Bracket
+              </button>
+            </div>
+          </div>
+        </Panel>
+
+        {!tournament ? (
+          <div className="grid gap-6 lg:grid-cols-[420px_1fr]">
+            <Panel>
+              <div className="mb-4 flex items-center gap-2 text-2xl font-semibold">
+                <Users className="h-6 w-6 text-emerald-300" /> Create Tournament
+              </div>
+              <label className="mb-2 block text-sm text-slate-300">Tournament Name</label>
+              <input value={name} onChange={(e) => setName(e.target.value)} className="mb-4 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 outline-none" />
+
+              <div className="mb-4 grid gap-3 md:grid-cols-3">
+                <div>
+                  <label className="mb-2 block text-sm text-slate-300">Game</label>
+                  <select value={gameType} onChange={(e) => setGameType(e.target.value as GameType)} className="w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 outline-none">
+                    <option value="8-ball">8-ball</option>
+                    <option value="9-ball">9-ball</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-2 block text-sm text-slate-300">Mode</label>
+                  <select value={teamMode} onChange={(e) => setTeamMode(e.target.value as TeamMode)} className="w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 outline-none">
+                    <option value="singles">Singles</option>
+                    <option value="doubles">Doubles</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-2 block text-sm text-slate-300">Bracket</label>
+                  <select value={bracketType} onChange={(e) => setBracketType(e.target.value as BracketType)} className="w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 outline-none">
+                    <option value="single-elim">Single Elim</option>
+                    <option value="double-elim">Double Elim</option>
+                  </select>
+                </div>
+              </div>
+
+              {doubleElimNotice ? <div className="mb-4 rounded-2xl border border-amber-400/30 bg-amber-500/10 p-4 text-sm text-amber-100"><AlertTriangle className="mr-2 inline h-4 w-4" /> The double-elim selector is in the UI, but the full loser’s-bracket engine still needs the dedicated next build.</div> : null}
+
+              <label className="mb-2 block text-sm text-slate-300">Players or Teams (one per line)</label>
+              <textarea value={playerText} onChange={(e) => setPlayerText(e.target.value)} className="min-h-[280px] w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 outline-none" />
+              <div className="mt-2 text-xs leading-6 text-slate-400">This default list now comes from the hidden club config. If old names still show up in an active bracket, that means a saved tournament is loaded from local storage — hit <span className="font-semibold text-white">Reset Bracket</span> or <span className="font-semibold text-white">Back to Setup</span> to clear it.</div>
+              <label className="mt-4 flex items-start gap-3 rounded-2xl border border-white/10 bg-white/5 p-3 text-sm text-slate-200">
+                <input type="checkbox" checked={includeInClubStats} onChange={(e) => setIncludeInClubStats(e.target.checked)} className="mt-1 h-4 w-4 rounded border-white/20 bg-black/40" />
+                <span>
+                  <span className="font-semibold text-white">Count this tournament toward club stats</span>
+                  <span className="mt-1 block text-xs text-slate-400">Leave this off when you are testing, messing around, or using the app for personal practice so the long-term leaderboard does not get polluted.</span>
+                </span>
+              </label>
+              <button onClick={handleCreateTournament} className="mt-4 w-full rounded-2xl bg-emerald-400 px-4 py-3 font-semibold text-black transition-transform duration-150 hover:-translate-y-0.5 hover:bg-emerald-300">
+                Build Bracket + Queue
+              </button>
+            </Panel>
+
+            <div className="space-y-6">
+              <Panel>
+                <div className="text-2xl font-semibold">Random Team Maker</div>
+                <div className="mt-2 text-sm text-slate-300">Build balanced doubles teams with some randomness so the draw does not always come out the same. Ratings stay hidden in the app and are only used behind the scenes for balancing.</div>
+                <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold text-white">Balanced randomizer ready</div>
+                      <div className="mt-1 text-sm text-slate-300">Uses your hidden club-strength config behind the scenes and keeps some randomness so the same teams do not come out every time.</div>
+                    </div>
+                    <Pill className="bg-white/10 text-white">Private config</Pill>
+                  </div>
+                </div>
+                <label className="mt-4 mb-2 block text-sm text-slate-300">Locked Teams (optional)</label>
+                <textarea value={lockedTeamsText} onChange={(e) => setLockedTeamsText(e.target.value)} placeholder={"One locked team per line\nLawrence / Felip"} className="min-h-[96px] w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 outline-none" />
+                <div className="mt-2 text-xs leading-6 text-slate-400">Locked teams stay together first. Everyone else is balanced around them. This is useful for siblings, rides, or pre-picked pairings.</div>
+                <div className="mt-4 flex flex-wrap gap-3">
+                  <button onClick={handleGenerateTeams} className="rounded-2xl bg-cyan-300 px-4 py-3 font-semibold text-black transition-transform duration-150 hover:-translate-y-0.5 hover:bg-cyan-200">Generate Balanced Teams</button>
+                  <button onClick={handleUseGeneratedTeams} className="rounded-2xl bg-white/10 px-4 py-3 font-semibold text-white transition-transform duration-150 hover:-translate-y-0.5">Use These Teams</button>
+                </div>
+                <div className={`mt-4 rounded-2xl p-4 text-sm ${generatedTeamsText ? "bg-emerald-500/10 text-emerald-100" : "bg-white/5 text-slate-300"}`}>{teamMakerMessage}</div>
+                <label className="mt-4 mb-2 block text-sm text-slate-300">Generated Teams</label>
+                <textarea value={generatedTeamsText} onChange={(e) => setGeneratedTeamsText(e.target.value)} placeholder="Generated doubles teams will appear here." className="min-h-[180px] w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 outline-none" />
+              </Panel>
+
+              <Panel>
+                <div className="text-2xl font-semibold">Release Notes</div>
+                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                  <div className="rounded-2xl bg-white/5 p-4"><div className="mb-2 text-xs uppercase tracking-[0.18em] text-emerald-300">vNext</div><div className="font-semibold text-white">Randomized bracket seeding</div><div className="mt-1 text-sm text-slate-300">Every new bracket draw now shuffles entrants before seeding so the tournament is not built the same way every time.</div></div>
+                  <div className="rounded-2xl bg-white/5 p-4"><div className="mb-2 text-xs uppercase tracking-[0.18em] text-cyan-300">vNext</div><div className="font-semibold text-white">Balanced random teams</div><div className="mt-1 text-sm text-slate-300">Doubles teams can now be generated from ratings, with fallback handling for unranked players and light randomness to keep results fresh.</div></div>
+                  <div className="rounded-2xl bg-white/5 p-4"><div className="mb-2 text-xs uppercase tracking-[0.18em] text-amber-300">vPrev</div><div className="font-semibold text-white">Public leaderboard</div><div className="mt-1 text-sm text-slate-300">Players can switch between the public bracket and the leaderboard without seeing admin-only controls.</div></div>
+                  <div className="rounded-2xl bg-white/5 p-4"><div className="mb-2 text-xs uppercase tracking-[0.18em] text-violet-300">vPrev</div><div className="font-semibold text-white">Safer live controls</div><div className="mt-1 text-sm text-slate-300">Rename, late entry, leaderboard, undo, and local save recovery all stay in place while the dashboard stays cleaner.</div></div>
+                </div>
+              </Panel>
+            </div>
+          </div>
+        ) : mode === "public" ? (
+          <PublicBracketView tournament={tournament} clubStats={clubStats} />
+        ) : (
+          <>
+            {champion ? (
+              <Panel className="border-emerald-400/30 bg-emerald-500/10">
+                <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <div className="mb-1 flex items-center gap-2 text-emerald-300"><Crown className="h-5 w-5" /> Champion</div>
+                    <div className="text-3xl font-bold">{champion}</div>
+                    <div className="mt-1 text-sm text-slate-300">{tournament.settings.gameType} · {tournament.settings.teamMode} · {tournament.settings.bracketType}</div>
+                  </div>
+                  <div className="flex flex-wrap gap-3">
+                    {tournament.status === "finished" ? <div className="self-center text-lg font-semibold text-emerald-200">Tournament Complete</div> : null}
+                    {tournament.includeInClubStats ? (
+                      <button onClick={handleSaveTournamentToClubStats} disabled={tournament.status !== "finished" || Boolean(tournament.statsSaved)} className="rounded-2xl bg-black/25 px-4 py-2 font-semibold text-emerald-100 transition-transform duration-150 hover:-translate-y-0.5 disabled:opacity-50">
+                        <Save className="mr-2 inline h-4 w-4" /> {tournament.statsSaved ? "Saved to Club Stats" : "Save to Club Stats"}
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              </Panel>
+            ) : null}
+
+            <div className="flex flex-wrap gap-3">
+              <button onClick={() => setAdminTab("dashboard")} className={`rounded-2xl px-4 py-2 font-semibold transition-transform duration-150 hover:-translate-y-0.5 ${adminTab === "dashboard" ? "bg-emerald-400 text-black" : "bg-white/10 text-white"}`}>
+                <LayoutDashboard className="mr-2 inline h-4 w-4" /> Dashboard
+              </button>
+              <button onClick={() => setAdminTab("bracket")} className={`rounded-2xl px-4 py-2 font-semibold transition-transform duration-150 hover:-translate-y-0.5 ${adminTab === "bracket" ? "bg-cyan-300 text-black" : "bg-white/10 text-white"}`}>
+                <Swords className="mr-2 inline h-4 w-4" /> Bracket
+              </button>
+              <button onClick={() => setAdminTab("leaderboard")} className={`rounded-2xl px-4 py-2 font-semibold transition-transform duration-150 hover:-translate-y-0.5 ${adminTab === "leaderboard" ? "bg-amber-300 text-black" : "bg-white/10 text-white"}`}>
+                <BarChart3 className="mr-2 inline h-4 w-4" /> Leaderboard
+              </button>
+            </div>
+
+            {adminTab === "dashboard" ? (
+            <>
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+              <Panel><div className="text-xs uppercase text-slate-400">Tournament</div><div className="mt-1 text-2xl font-semibold">{tournament.name}</div></Panel>
+              <Panel><div className="text-xs uppercase text-slate-400">Players</div><div className="mt-1 text-2xl font-semibold">{tournament.players.length}</div></Panel>
+              <Panel><div className="text-xs uppercase text-slate-400">Game</div><div className="mt-1 text-2xl font-semibold">{tournament.settings.gameType}</div></Panel>
+              <Panel><div className="text-xs uppercase text-slate-400">Mode</div><div className="mt-1 text-2xl font-semibold">{tournament.settings.teamMode}</div></Panel>
+              <Panel><div className="text-xs uppercase text-slate-400">Bracket</div><div className="mt-1 text-2xl font-semibold">{tournament.settings.bracketType}</div></Panel>
+              <Panel><div className="text-xs uppercase text-slate-400">Open Table</div><div className="mt-1 text-2xl font-semibold">{getOpenTable(tournament.matches) ? `T${getOpenTable(tournament.matches)}` : "0"}</div></Panel>
+            </div>
+
+            <Panel className="border-white/10 bg-black/30">
+              <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Public View</div>
+                  <div className="mt-2 text-sm text-slate-300 break-all">{typeof window !== "undefined" ? `${window.location.origin}${window.location.pathname}#public` : "#public"}</div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <img src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(typeof window !== "undefined" ? `${window.location.origin}${window.location.pathname}#public` : "#public")}`} alt="QR code for public bracket view" className="h-20 w-20 rounded-2xl border border-white/10 bg-white p-2" />
+                  <button onClick={handleCopyPublicLink} className="rounded-2xl bg-white/10 px-4 py-2 font-semibold text-white transition-transform duration-150 hover:-translate-y-0.5">
+                    <Copy className="mr-2 inline h-4 w-4" /> {copiedPublicLink ? "Copied" : "Copy Link"}
+                  </button>
+                </div>
+              </div>
+            </Panel>
+
+            <div className="grid gap-6 xl:grid-cols-[380px_minmax(0,1fr)]">
+              <div className="space-y-6">
+                <Panel>
+                  <div className="mb-4 flex items-center gap-2 text-xl font-semibold"><Table2 className="h-5 w-5 text-amber-300" /> Live Tables</div>
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-1">
+                    {[1, 2].map((table) => {
+                      const live = inProgress.find((m) => m.tableNumber === table);
+                      return (
+                        <div key={table} className="rounded-2xl bg-white/5 p-4">
+                          <div className="mb-2 text-sm uppercase text-amber-300">Table {table}</div>
+                          <div className="text-lg font-semibold">{live ? `${playerName(tournament.players, live.player1Id)} vs ${playerName(tournament.players, live.player2Id)}` : "Open"}</div>
+                          <div className="mt-1 text-sm text-slate-400">{live ? "Single game match" : "Ready for the next match"}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </Panel>
+
+                <Panel>
+                  <div className="mb-4 flex items-center gap-2 text-xl font-semibold"><Play className="h-5 w-5 text-emerald-300" /> Queue</div>
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-1">
+                    <div className={`rounded-2xl bg-emerald-500/10 p-4 transition-all duration-300 ${nextUp ? "animate-[slowPulse_2.8s_ease-in-out_infinite] ring-1 ring-emerald-300/25" : ""}`}>
+                      <div className="mb-2 text-sm uppercase tracking-[0.2em] text-emerald-300">Next Up</div>
+                      <div className="text-2xl font-semibold">{nextUp ? `${playerName(tournament.players, nextUp.player1Id)} vs ${playerName(tournament.players, nextUp.player2Id)}` : "Waiting..."}</div>
+                      <div className="mt-2 text-sm text-slate-300">{nextUp ? "Single game match" : "No ready match"}</div>
+                    </div>
+                    <div className={`rounded-2xl bg-cyan-500/10 p-4 transition-all duration-300 ${onDeck ? "animate-[queueSlide_0.42s_ease-out]" : ""}`}>
+                      <div className="mb-2 text-sm uppercase tracking-[0.2em] text-cyan-300">On Deck</div>
+                      <div className="text-2xl font-semibold">{onDeck ? `${playerName(tournament.players, onDeck.player1Id)} vs ${playerName(tournament.players, onDeck.player2Id)}` : "Waiting..."}</div>
+                      <div className="mt-2 text-sm text-slate-300">{onDeck ? "Single game match" : "Pending results"}</div>
+                    </div>
+                  </div>
+                </Panel>
+
+                <Panel>
+                  <div className="mb-4 flex items-center gap-2 text-xl font-semibold"><UserPlus className="h-5 w-5 text-cyan-300" /> Late Arrival</div>
+                  <input value={lateName} onChange={(e) => setLateName(e.target.value)} placeholder={tournament.settings.teamMode === "doubles" ? "Team name or Player A / Player B" : "Late player name"} className="mb-3 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 outline-none" />
+                  <div className="mb-3 grid grid-cols-3 gap-3">
+                    <button onClick={() => setLateMode("bye")} className={`rounded-2xl px-4 py-3 text-sm font-semibold transition-transform duration-150 hover:-translate-y-0.5 ${lateMode === "bye" ? "bg-emerald-400 text-black" : "bg-white/10 text-white"}`}>Fill Bye</button>
+                    <button onClick={() => setLateMode("unstarted")} className={`rounded-2xl px-4 py-3 text-sm font-semibold transition-transform duration-150 hover:-translate-y-0.5 ${lateMode === "unstarted" ? "bg-cyan-300 text-black" : "bg-white/10 text-white"}`}>Open Slot</button>
+                    <button onClick={() => setLateMode("replace-bye-player")} className={`rounded-2xl px-4 py-3 text-sm font-semibold transition-transform duration-150 hover:-translate-y-0.5 ${lateMode === "replace-bye-player" ? "bg-amber-300 text-black" : "bg-white/10 text-white"}`}>Replace</button>
+                  </div>
+                  <button onClick={handleLateAdd} className="w-full rounded-2xl bg-white px-4 py-3 font-semibold text-black transition-transform duration-150 hover:-translate-y-0.5 hover:bg-slate-100">Add Late Entry</button>
+                  {lateMessage ? <div className={`mt-3 rounded-2xl p-3 text-sm ${lateMessage.startsWith("No clean") || lateMessage.startsWith("For doubles") ? "bg-amber-500/10 text-amber-100" : "bg-emerald-500/10 text-emerald-100"}`}>{lateMessage}</div> : null}
+                </Panel>
+
+                <Panel>
+                  <div className="mb-4 flex items-center gap-2 text-xl font-semibold"><Pencil className="h-5 w-5 text-emerald-300" /> Rename / Replace Player</div>
+                  <input value={renameFrom} onChange={(e) => setRenameFrom(e.target.value)} placeholder="Current player or team name" className="mb-3 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 outline-none" />
+                  <input value={renameTo} onChange={(e) => setRenameTo(e.target.value)} placeholder="New player or team name" className="mb-3 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 outline-none" />
+                  <button onClick={handleRename} className="w-full rounded-2xl bg-white px-4 py-3 font-semibold text-black transition-transform duration-150 hover:-translate-y-0.5 hover:bg-slate-100">Apply Name Change</button>
+                  {renameMessage ? <div className={`mt-3 rounded-2xl p-3 text-sm ${renameMessage.startsWith("Could not") || renameMessage.startsWith("Enter ") ? "bg-amber-500/10 text-amber-100" : "bg-emerald-500/10 text-emerald-100"}`}>{renameMessage}</div> : null}
+                </Panel>
+              </div>
+
+              <div className="min-w-0">
+                <Panel>
+                  <div className="mb-4 flex items-center gap-2 text-xl font-semibold"><Swords className="h-5 w-5 text-emerald-300" /> Quick Bracket</div>
+                  <div className="mb-3 text-sm uppercase tracking-[0.18em] text-slate-400">Live bracket board</div>
+                  <BracketGraphic tournament={tournament} compact={true} />
+                </Panel>
+              </div>
+            </div>
+            </>
+            ) : adminTab === "bracket" ? (
+              <Panel>
+                <div className="mb-4 flex items-center gap-2 text-xl font-semibold"><Swords className="h-5 w-5 text-emerald-300" /> Admin Bracket Control</div>
+                <div className="mb-6 min-w-0">
+                  <div className="mb-3 text-sm uppercase tracking-[0.18em] text-slate-400">Bracket Graphic</div>
+                  <BracketGraphic tournament={tournament} compact={true} />
+                </div>
+                <div className="space-y-6">
+                  {rounds.map(([roundNumber, matches]) => (
+                    <div key={roundNumber}>
+                      <div className="mb-3 text-lg font-semibold text-slate-200">{matches.length === 1 ? "Final" : matches.length === 2 ? "Semifinal" : `Round ${roundNumber}`}</div>
+                      <div className="grid gap-3 lg:grid-cols-2">
+                        {matches.map((match) => (
+                          <MatchCard key={match.id} tournament={tournament} match={match} admin={true} onStart={wrappedStart} onFinish={wrappedFinish} />
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </Panel>
+            ) : (
+              <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
+                <Panel>
+                  <div className="mb-4 flex items-center gap-2 text-xl font-semibold"><Medal className="h-5 w-5 text-amber-300" /> Leaderboard</div>
+                  <div className="mb-4 text-sm text-slate-300">Simple standings for club use: wins, losses, active status, and final placement when the tournament finishes.</div>
+                  <LeaderboardTable tournament={tournament} clubStats={clubStats} />
+                </Panel>
+                <Panel>
+                  <div className="mb-4 text-xl font-semibold">Quick Summary</div>
+                  <div className="space-y-3 text-sm text-slate-300">
+                    <div className="rounded-2xl bg-white/5 p-4"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">Tournament</div><div className="mt-1 text-lg font-semibold text-white">{tournament.name}</div></div>
+                    <div className="rounded-2xl bg-white/5 p-4"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">Champion</div><div className="mt-1 text-lg font-semibold text-white">{champion || "Not decided yet"}</div></div>
+                    <div className="rounded-2xl bg-white/5 p-4"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">Players</div><div className="mt-1 text-lg font-semibold text-white">{tournament.players.length}</div></div>
+                    <div className="rounded-2xl bg-white/5 p-4"><div className="text-xs uppercase tracking-[0.18em] text-slate-400">Next Up</div><div className="mt-1 text-lg font-semibold text-white">{nextUp ? `${playerName(tournament.players, nextUp.player1Id)} vs ${playerName(tournament.players, nextUp.player2Id)}` : "Waiting..."}</div></div>
+                  </div>
+                </Panel>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
