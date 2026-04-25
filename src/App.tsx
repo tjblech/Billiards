@@ -1088,7 +1088,7 @@ function Pill({ children, className = "" }: { children: React.ReactNode; classNa
 }
 
 function Panel({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return <div className={`rounded-3xl border border-emerald-300/10 bg-black/35 p-5 shadow-[0_0_0_1px_rgba(52,211,153,0.05)] backdrop-blur ${className}`}>{children}</div>;
+  return <div className={`ui-panel rounded-[30px] border border-white/10 bg-slate-950/55 p-5 shadow-[0_20px_60px_rgba(0,0,0,0.30)] backdrop-blur-xl ${className}`}>{children}</div>;
 }
 
 function StatusPill({ status }: { status: MatchStatus }) {
@@ -1162,7 +1162,7 @@ function MatchCard({
   const winner2 = isRealWin && match.winnerId === match.player2Id;
 
   return (
-    <div className="rounded-2xl border border-emerald-300/10 bg-white/5 p-4 transition-transform duration-150 hover:-translate-y-1 hover:border-emerald-300/30">
+    <div className="match-card rounded-2xl border border-white/10 bg-slate-950/50 p-4 transition-transform duration-150 hover:-translate-y-1 hover:border-emerald-300/30">
       <div className="mb-3 flex items-center justify-between gap-2">
         <div>
           <div className="text-sm text-slate-400">{getMatchDisplayLabel(match)}</div>
@@ -1294,7 +1294,7 @@ function SingleBracketGraphic({
   });
 
   return (
-    <div className="w-full overflow-x-auto overflow-y-visible rounded-3xl border border-emerald-300/10 bg-black/20 p-3 pb-8">
+    <div className="bracket-board w-full overflow-x-auto overflow-y-visible rounded-3xl border border-white/10 bg-black/20 p-3 pb-8">
       <div
         className="relative min-w-full overflow-visible"
         style={{
@@ -1357,7 +1357,7 @@ function SingleBracketGraphic({
                     className="absolute left-0"
                     style={{ top: `${top}px`, width: `${cardWidth}px`, height: `${matchHeight}px` }}
                   >
-                    <div className={`flex h-full flex-col rounded-[22px] border border-emerald-300/10 bg-[#081325]/95 px-3 pb-4 pt-2.5 shadow-[0_12px_30px_rgba(0,0,0,0.28)] overflow-visible transition-all duration-300 ${animatedMatchIds.includes(match.id) ? "animate-[queueSlide_0.42s_ease-out]" : ""}`}>
+                    <div className={`bracket-match flex h-full flex-col rounded-[22px] border border-white/10 bg-[#081325]/95 px-3 pb-4 pt-2.5 shadow-[0_12px_30px_rgba(0,0,0,0.28)] overflow-visible transition-all duration-300 ${animatedMatchIds.includes(match.id) ? "animate-[queueSlide_0.42s_ease-out]" : ""}`}>
                       <div className="mb-2 flex items-center justify-between gap-2 text-xs text-slate-400">
                         <span>{getMatchDisplayLabel(match)}</span>
                         <StatusPill status={match.status} />
@@ -1399,7 +1399,7 @@ function GrandFinalGraphic({
         const winner1 = match.winnerId === match.player1Id && match.winnerId;
         const winner2 = match.winnerId === match.player2Id && match.winnerId;
         return (
-          <div key={match.id} className={`rounded-[22px] border border-emerald-300/10 bg-[#081325]/95 p-4 shadow-[0_12px_30px_rgba(0,0,0,0.28)] ${animatedMatchIds.includes(match.id) ? "animate-[queueSlide_0.42s_ease-out]" : ""}`}>
+          <div key={match.id} className={`bracket-match rounded-[22px] border border-white/10 bg-[#081325]/95 p-4 shadow-[0_12px_30px_rgba(0,0,0,0.28)] ${animatedMatchIds.includes(match.id) ? "animate-[queueSlide_0.42s_ease-out]" : ""}`}>
             <div className="mb-3 flex items-center justify-between gap-2 text-xs text-slate-400">
               <span>{getRoundTitle(match.round, 1, "GF")}</span>
               <StatusPill status={match.status} />
@@ -1929,7 +1929,7 @@ export default function BilliardsTournamentManager() {
 
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top,#123f2f_0%,#071a14_36%,#020617_100%)] p-6 text-white">
+    <div className="billiards-app min-h-screen p-4 text-white sm:p-6">
       <ConfettiOverlay show={showConfetti} />
         <style>{`
           @keyframes queueSlide {
@@ -1947,15 +1947,15 @@ export default function BilliardsTournamentManager() {
           }
         `}</style>
       <div className="mx-auto max-w-7xl space-y-6">
-        <Panel className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <Panel className="app-header relative overflow-hidden p-6 md:p-7 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <div className="mb-2 flex items-center gap-2 text-emerald-300">
               <Wifi className="h-4 w-4" />
-              <span className="text-xs uppercase tracking-[0.28em]">GitHub Pages + Supabase Ready</span>
+              <span className="text-xs uppercase tracking-[0.28em]">Live Bracket Control System</span>
             </div>
-            <h1 className="text-4xl font-bold tracking-tight">Billiards Tournament Manager</h1>
-            <p className="mt-2 text-sm text-slate-300">
-              Shared bracket, two-table queue, late arrival controls, undo, and a public view that stays simple.
+            <h1 className="text-4xl font-black tracking-tight md:text-5xl">Billiards Tournament Manager</h1>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300 md:text-base">
+              Run a cleaner club tournament with a live bracket, two-table queue, quick admin controls, and a public view players can follow from their phones.
             </p>
           </div>
 
@@ -2009,7 +2009,7 @@ export default function BilliardsTournamentManager() {
         </Panel>
 
         {!tournament ? (
-          <div className="grid gap-6 lg:grid-cols-[420px_1fr]">
+          <div className="setup-layout grid gap-6 lg:grid-cols-[440px_1fr]">
             <Panel>
               <div className="mb-4 flex items-center gap-2 text-2xl font-semibold">
                 <Users className="h-6 w-6 text-emerald-300" /> Create Tournament
@@ -2176,8 +2176,8 @@ export default function BilliardsTournamentManager() {
                     {[1, 2].map((table) => {
                       const live = inProgress.find((m) => m.tableNumber === table);
                       return (
-                        <div key={table} className="rounded-2xl bg-white/5 p-4">
-                          <div className="mb-2 text-sm uppercase text-amber-300">Table {table}</div>
+                        <div key={table} className="live-table-card rounded-2xl bg-white/5 p-4">
+                          <div className="mb-2 text-sm uppercase tracking-[0.18em] text-amber-300">Table {table}</div>
                           <div className="text-lg font-semibold">{live ? `${playerName(tournament.players, live.player1Id)} vs ${playerName(tournament.players, live.player2Id)}` : "Open"}</div>
                           <div className="mt-1 text-sm text-slate-400">{live ? "Single game match" : "Ready for the next match"}</div>
                         </div>
