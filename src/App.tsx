@@ -383,26 +383,10 @@ function propagateBracket(matches: Match[], bracketType: BracketType) {
     }
 
     if (match.status !== "finished" && match.status !== "inProgress") {
-      const isRoundOneSourceMatch = !match.source1 && !match.source2;
-
-      if (match.player1Id && match.player2Id) {
-        match.winnerId = null;
-        match.status = "waiting";
-        match.tableNumber = null;
-      } else if (isRoundOneSourceMatch && match.player1Id && !match.player2Id) {
-        match.winnerId = match.player1Id;
-        match.status = "waiting";
-        match.tableNumber = null;
-      } else if (isRoundOneSourceMatch && match.player2Id && !match.player1Id) {
-        match.winnerId = match.player2Id;
-        match.status = "waiting";
-        match.tableNumber = null;
-      } else {
-        match.winnerId = null;
-        match.status = "waiting";
-        match.tableNumber = null;
-      }
-}
+      match.winnerId = null;
+      match.status = "waiting";
+      match.tableNumber = null;
+    }
 
     if (!match.player1Id && !match.player2Id && match.status !== "finished" && match.status !== "inProgress") {
       match.status = "waiting";
@@ -443,6 +427,26 @@ function getPlayerLastFinishedRound(matches: Match[], playerId: string | null) {
   return lastRound;
 }
 
+function getBottomCardOrder(matches: Match[]) {
+  const roundOneWinners = matches
+    .filter((match) => match.bracket === "W" && match.round === 1)
+    .sort((a, b) => a.slot - b.slot);
+
+  const remaining = matches
+    .filter((match) => !(match.bracket === "W" && match.round === 1))
+    .sort((a, b) => {
+      if (a.bracket === "GF" && b.bracket !== "GF") return 1;
+      if (b.bracket === "GF" && a.bracket !== "GF") return -1;
+      if (a.round !== b.round) return a.round - b.round;
+      if (a.slot !== b.slot) return a.slot - b.slot;
+      if (a.bracket === b.bracket) return 0;
+      if (a.bracket === "W" && b.bracket === "L") return -1;
+      if (a.bracket === "L" && b.bracket === "W") return 1;
+      return 0;
+    });
+
+  return [...roundOneWinners, ...remaining];
+}
 
 function applyQueue(matches: Match[]): Match[] {
   const copy: Match[] = matches.map((match): Match => ({
@@ -1780,25 +1784,6 @@ export default function BilliardsTournamentManager() {
   const inProgress = allMatches.filter((m) => m.status === "inProgress").sort((a, b) => (a.tableNumber ?? 0) - (b.tableNumber ?? 0));
   const championId = tournament ? getTournamentChampionIdFromMatches(tournament.matches, tournament.settings.bracketType) : null;
   const champion = tournament ? playerName(tournament.players, championId) : "";
-  const bracketSections = useMemo(() => {
-    const streams: BracketStream[] = tournament?.settings.bracketType === "double-elim" ? ["W", "L", "GF"] : ["W"];
-    return streams
-      .map((stream) => {
-        const sectionMatches = allMatches.filter((match) => match.bracket === stream);
-        const grouped = new Map<number, Match[]>();
-        for (const match of sectionMatches) {
-          const arr = grouped.get(match.round) ?? [];
-          arr.push(match);
-          grouped.set(match.round, arr);
-        }
-        return {
-          stream,
-          rounds: [...grouped.entries()].sort((a, b) => a[0] - b[0]),
-        };
-      })
-      .filter((section) => section.rounds.length > 0);
-  }, [allMatches, tournament?.settings.bracketType]);
-
   function pushHistory() {
     if (tournament) setHistory((prev) => [...prev, JSON.parse(JSON.stringify(tournament))]);
   }
@@ -1829,15 +1814,22 @@ export default function BilliardsTournamentManager() {
   }
 
   function handleResetBracket() {
-    localStorage.removeItem(STORAGE_KEY);
-    setTournament(null);
+    if (!tournament) return;
+
+    const settings: TournamentSettings = { gameType, teamMode, bracketType };
+    const fresh = createTournament(
+      tournament.name || name || DEFAULT_TOURNAMENT_NAME,
+      playerText,
+      settings,
+      includeInClubStats
+    );
+
+    setTournament(fresh);
     setHistory([]);
     setLateMessage("");
     setRenameMessage("");
-    window.location.hash = "admin";
-    setMode("admin"); 
+    window.location.hash = mode === "public" ? "public" : "admin";
   }
-
   function handleBackToSetup() {
     if (tournament) {
       setName(tournament.name);
@@ -2239,25 +2231,16 @@ export default function BilliardsTournamentManager() {
                   <div className="mb-3 text-sm uppercase tracking-[0.18em] text-slate-400">Bracket Graphic</div>
                   <BracketGraphic tournament={tournament} compact={true} animatedMatchIds={animatedMatchIds} />
                 </div>
-                <div className="space-y-8">
-                  {bracketSections.map((section) => (
-                    <div key={section.stream}>
-                      <div className="mb-4 text-xl font-semibold text-slate-100">
-                        {section.stream === "W" ? "Winners Bracket" : section.stream === "L" ? "Losers Bracket" : "Grand Finals"}
-                      </div>
-                      <div className="space-y-6">
-                        {section.rounds.map(([roundNumber, matches]) => (
-                          <div key={`${section.stream}-${roundNumber}`}>
-                            <div className="mb-3 text-lg font-semibold text-slate-200">{getRoundTitle(roundNumber, matches.length, section.stream)}</div>
-                            <div className="grid gap-3 lg:grid-cols-2">
-                              {matches.map((match) => (
-                                <MatchCard key={match.id} tournament={tournament} match={match} admin={true} onStart={wrappedStart} onFinish={wrappedFinish} />
-                              ))}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
+                <div className="grid gap-3 lg:grid-cols-2">
+                  {getBottomCardOrder(allMatches).map((match) => (
+                    <MatchCard
+                      key={match.id}
+                      tournament={tournament}
+                      match={match}
+                      admin={true}
+                      onStart={wrappedStart}
+                      onFinish={wrappedFinish}
+                    />
                   ))}
                 </div>
               </Panel>
