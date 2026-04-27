@@ -432,20 +432,31 @@ function getBottomCardOrder(matches: Match[]) {
     .filter((match) => match.bracket === "W" && match.round === 1)
     .sort((a, b) => a.slot - b.slot);
 
+  const matchesById = new Map(matches.map((match) => [match.id, match]));
+  const depthMemo = new Map<string, number>();
+
   const remaining = matches
-    .filter((match) => !(match.bracket === "W" && match.round === 1))
+    .filter((match) => !(match.bracket === "W" && match.round === 1) && match.bracket !== "GF")
     .sort((a, b) => {
-      if (a.bracket === "GF" && b.bracket !== "GF") return 1;
-      if (b.bracket === "GF" && a.bracket !== "GF") return -1;
-      if (a.round !== b.round) return a.round - b.round;
+      const aDepth = getMatchStageDepth(a, matchesById, depthMemo);
+      const bDepth = getMatchStageDepth(b, matchesById, depthMemo);
+      if (aDepth !== bDepth) return aDepth - bDepth;
+
       if (a.slot !== b.slot) return a.slot - b.slot;
+
       if (a.bracket === b.bracket) return 0;
       if (a.bracket === "W" && b.bracket === "L") return -1;
       if (a.bracket === "L" && b.bracket === "W") return 1;
+
+      if (a.round !== b.round) return a.round - b.round;
       return 0;
     });
 
-  return [...roundOneWinners, ...remaining];
+  const grandFinals = matches
+    .filter((match) => match.bracket === "GF")
+    .sort((a, b) => a.round - b.round || a.slot - b.slot);
+
+  return [...roundOneWinners, ...remaining, ...grandFinals];
 }
 
 function applyQueue(matches: Match[]): Match[] {
@@ -1816,12 +1827,13 @@ export default function BilliardsTournamentManager() {
   function handleResetBracket() {
     if (!tournament) return;
 
-    const settings: TournamentSettings = { gameType, teamMode, bracketType };
+    const settings: TournamentSettings = { ...tournament.settings };
+    const currentPlayers = tournament.players.map((player) => player.name).join("\n");
     const fresh = createTournament(
       tournament.name || name || DEFAULT_TOURNAMENT_NAME,
-      playerText,
+      currentPlayers,
       settings,
-      includeInClubStats
+      Boolean(tournament.includeInClubStats)
     );
 
     setTournament(fresh);
