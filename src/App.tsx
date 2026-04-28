@@ -193,6 +193,14 @@ function playerName(players: Player[], id: string | null) {
   return players.find((p) => p.id === id)?.name ?? "TBD";
 }
 
+function playerNameForSlot(players: Player[], match: Match, slot: 1 | 2) {
+  const currentId = slot === 1 ? match.player1Id : match.player2Id;
+  const otherId = slot === 1 ? match.player2Id : match.player1Id;
+  if (currentId) return playerName(players, currentId);
+  if (otherId) return "Bye Round";
+  return "TBD";
+}
+
 
 function createWinnerBracketMatches(players: Player[], settings: TournamentSettings) {
   if (players.length < 2) return [] as Match[];
@@ -432,20 +440,33 @@ function getBottomCardOrder(matches: Match[]) {
     .filter((match) => match.bracket === "W" && match.round === 1)
     .sort((a, b) => a.slot - b.slot);
 
+  function getPlayWave(match: Match) {
+    if (match.bracket === "W") return Math.max(match.round - 2, 0);
+    if (match.bracket === "L") return Math.max(match.round - 1, 0);
+    return Number.MAX_SAFE_INTEGER;
+  }
+
   const remaining = matches
-    .filter((match) => !(match.bracket === "W" && match.round === 1))
+    .filter((match) => !(match.bracket === "W" && match.round === 1) && match.bracket !== "GF")
     .sort((a, b) => {
-      if (a.bracket === "GF" && b.bracket !== "GF") return 1;
-      if (b.bracket === "GF" && a.bracket !== "GF") return -1;
-      if (a.round !== b.round) return a.round - b.round;
+      const waveDiff = getPlayWave(a) - getPlayWave(b);
+      if (waveDiff !== 0) return waveDiff;
+
       if (a.slot !== b.slot) return a.slot - b.slot;
+
       if (a.bracket === b.bracket) return 0;
       if (a.bracket === "W" && b.bracket === "L") return -1;
       if (a.bracket === "L" && b.bracket === "W") return 1;
+
+      if (a.round !== b.round) return a.round - b.round;
       return 0;
     });
 
-  return [...roundOneWinners, ...remaining];
+  const grandFinals = matches
+    .filter((match) => match.bracket === "GF")
+    .sort((a, b) => a.round - b.round || a.slot - b.slot);
+
+  return [...roundOneWinners, ...remaining, ...grandFinals];
 }
 
 function applyQueue(matches: Match[]): Match[] {
@@ -1025,7 +1046,7 @@ function tournamentSummaryText(tournament: Tournament, clubStats?: ClubStatsMap)
     "Completed matches:",
     ...tournament.matches
       .filter((match) => match.status === "finished")
-      .map((match) => `${getMatchDisplayLabel(match)}: ${playerName(tournament.players, match.player1Id)} vs ${playerName(tournament.players, match.player2Id)} — winner ${playerName(tournament.players, match.winnerId)}`),
+      .map((match) => `${getMatchDisplayLabel(match)}: ${playerNameForSlot(tournament.players, match, 1)} vs ${playerNameForSlot(tournament.players, match, 2)} — winner ${playerName(tournament.players, match.winnerId)}`),
   ];
   return lines.join("\n");
 }
@@ -1157,8 +1178,8 @@ function MatchCard({
   onStart: (matchId: string) => void;
   onFinish: (matchId: string, winnerId: string) => void;
 }) {
-  const p1 = playerName(tournament.players, match.player1Id);
-  const p2 = playerName(tournament.players, match.player2Id);
+  const p1 = playerNameForSlot(tournament.players, match, 1);
+  const p2 = playerNameForSlot(tournament.players, match, 2);
   const openTable = getOpenTable(tournament.matches);
 
   const isRealWin = match.status === "finished";
@@ -1368,10 +1389,10 @@ function SingleBracketGraphic({
                       </div>
                       <div className="mt-1 flex-1 space-y-2 text-[15px] min-h-0">
                         <div className={`truncate rounded-xl px-4 py-3 ${winner1 ? "bg-emerald-500/18 text-emerald-100 ring-1 ring-emerald-300/20" : "bg-white/[0.06]"}`}>
-                          {playerName(tournament.players, match.player1Id)}
+                          {playerNameForSlot(tournament.players, match, 1)}
                         </div>
                         <div className={`truncate rounded-xl px-4 py-3 ${winner2 ? "bg-emerald-500/18 text-emerald-100 ring-1 ring-emerald-300/20" : "bg-white/[0.06]"}`}>
-                          {playerName(tournament.players, match.player2Id)}
+                          {playerNameForSlot(tournament.players, match, 2)}
                         </div>
                       </div>
                     </div>
@@ -1410,10 +1431,10 @@ function GrandFinalGraphic({
             </div>
             <div className="space-y-2">
               <div className={`truncate rounded-xl px-4 py-3 ${winner1 ? "bg-emerald-500/18 text-emerald-100 ring-1 ring-emerald-300/20" : "bg-white/[0.06]"}`}>
-                {playerName(tournament.players, match.player1Id)}
+                {playerNameForSlot(tournament.players, match, 1)}
               </div>
               <div className={`truncate rounded-xl px-4 py-3 ${winner2 ? "bg-emerald-500/18 text-emerald-100 ring-1 ring-emerald-300/20" : "bg-white/[0.06]"}`}>
-                {playerName(tournament.players, match.player2Id)}
+                {playerNameForSlot(tournament.players, match, 2)}
               </div>
             </div>
           </div>
@@ -1675,8 +1696,8 @@ function CallToTableView({
                     Table {match.tableNumber}
                   </div>
                   <div className="mt-3 text-3xl font-bold leading-tight md:text-5xl">
-                    {playerName(tournament.players, match.player1Id)} vs{" "}
-                    {playerName(tournament.players, match.player2Id)}
+                    {playerNameForSlot(tournament.players, match, 1)} vs{" "}
+                    {playerNameForSlot(tournament.players, match, 2)}
                   </div>
                 </div>
               ))
@@ -1718,6 +1739,7 @@ function CallToTableView({
 }
 
 export default function BilliardsTournamentManager() {
+  const [publicOnlyAccess] = useState(() => window.location.hash.includes("public"));
   const [mode, setMode] = useState<ViewMode>(window.location.hash.includes("public") ? "public" : "admin");
   const [adminTab, setAdminTab] = useState<AdminTab>("dashboard");
   const [name, setName] = useState(DEFAULT_TOURNAMENT_NAME);
@@ -1755,11 +1777,16 @@ export default function BilliardsTournamentManager() {
 
   useEffect(() => {
     const onHashChange = () => {
+      if (publicOnlyAccess) {
+        setMode("public");
+        if (!window.location.hash.includes("public")) window.location.hash = "public";
+        return;
+      }
       setMode(window.location.hash.includes("public") ? "public" : "admin");
     };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
-  }, []);
+  }, [publicOnlyAccess]);
 
   useEffect(() => {
     if (tournament?.status === "finished") {
@@ -1816,12 +1843,13 @@ export default function BilliardsTournamentManager() {
   function handleResetBracket() {
     if (!tournament) return;
 
-    const settings: TournamentSettings = { gameType, teamMode, bracketType };
+    const settings: TournamentSettings = { ...tournament.settings };
+    const currentPlayers = tournament.players.map((player) => player.name).join("\n");
     const fresh = createTournament(
       tournament.name || name || DEFAULT_TOURNAMENT_NAME,
-      playerText,
+      currentPlayers,
       settings,
-      includeInClubStats
+      Boolean(tournament.includeInClubStats)
     );
 
     setTournament(fresh);
@@ -1882,6 +1910,7 @@ export default function BilliardsTournamentManager() {
   }
 
   function headerLink(target: ViewMode) {
+    if (publicOnlyAccess && target === "admin") return;
     window.location.hash = target;
     setMode(target);
   }
@@ -1953,17 +1982,23 @@ export default function BilliardsTournamentManager() {
 
           <div className="flex flex-col items-start gap-3 lg:items-end">
             <div className="flex flex-wrap gap-3">
-              <button onClick={() => headerLink("admin")} className={`rounded-2xl px-4 py-2 font-semibold transition-transform duration-150 hover:-translate-y-0.5 ${mode === "admin" ? "bg-emerald-400 text-black" : "bg-white/10 text-white"}`}>
-                <Shield className="mr-2 inline h-4 w-4" /> Admin View
-              </button>
+              {!publicOnlyAccess ? (
+                <button onClick={() => headerLink("admin")} className={`rounded-2xl px-4 py-2 font-semibold transition-transform duration-150 hover:-translate-y-0.5 ${mode === "admin" ? "bg-emerald-400 text-black" : "bg-white/10 text-white"}`}>
+                  <Shield className="mr-2 inline h-4 w-4" /> Admin View
+                </button>
+              ) : null}
               <button onClick={() => headerLink("public")} className={`rounded-2xl px-4 py-2 font-semibold transition-transform duration-150 hover:-translate-y-0.5 ${mode === "public" ? "bg-cyan-300 text-black" : "bg-white/10 text-white"}`}>
                 <Globe className="mr-2 inline h-4 w-4" /> Public View
               </button>
-              <button onClick={handleBackToSetup} className="rounded-2xl bg-white/10 px-4 py-2 font-semibold text-white transition-transform duration-150 hover:-translate-y-0.5">
-                <ArrowLeft className="mr-2 inline h-4 w-4" /> Back to Setup
-              </button>
+              {!publicOnlyAccess ? (
+                <button onClick={handleBackToSetup} className="rounded-2xl bg-white/10 px-4 py-2 font-semibold text-white transition-transform duration-150 hover:-translate-y-0.5">
+                  <ArrowLeft className="mr-2 inline h-4 w-4" /> Back to Setup
+                </button>
+              ) : null}
             </div>
             <div className="flex flex-wrap items-center gap-3">
+              {!publicOnlyAccess ? (
+                <>
               <button onClick={handleUndo} disabled={history.length === 0} className="rounded-2xl bg-white/10 px-4 py-2 font-semibold text-white transition-transform duration-150 hover:-translate-y-0.5 disabled:opacity-40">
                 <Undo2 className="mr-2 inline h-4 w-4" /> Undo
               </button>
@@ -1987,9 +2022,12 @@ export default function BilliardsTournamentManager() {
               >
                 Return to Bracket
               </button>
+                </>
+              ) : null}
               {tournament ? (
                 <button
                   onClick={handleResetBracket}
+                  disabled={publicOnlyAccess}
                   className="rounded-2xl bg-white/10 px-4 py-2 font-semibold text-white transition-transform duration-150 hover:-translate-y-0.5"
                 >
                   <RefreshCw className="mr-2 inline h-4 w-4" />
@@ -2001,6 +2039,14 @@ export default function BilliardsTournamentManager() {
         </Panel>
 
         {!tournament ? (
+          publicOnlyAccess ? (
+            <Panel>
+              <div className="text-xl font-semibold text-cyan-200">Public View</div>
+              <div className="mt-2 text-sm text-slate-300">
+                No active tournament is available on this device yet.
+              </div>
+            </Panel>
+          ) : (
           <div className="setup-layout grid gap-6 lg:grid-cols-[440px_1fr]">
             <Panel>
               <div className="mb-4 flex items-center gap-2 text-2xl font-semibold">
@@ -2098,6 +2144,7 @@ export default function BilliardsTournamentManager() {
               </Panel>
             </div>
           </div>
+          )
         ) : mode === "public" ? (
           <PublicBracketView tournament={tournament} clubStats={clubStats} animatedMatchIds={animatedMatchIds}/>
         ) : (

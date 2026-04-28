@@ -4,64 +4,64 @@ A modern tournament bracket manager built for billiards clubs.
 
 This project was made to improve on tools like BracketHQ by offering a cleaner interface, smarter match ordering, better two-table flow, and a public-facing bracket display that works well for club environments.
 
-## Why This Exists
+## Why this exists
 
 Most bracket tools work, but they are not built around the actual flow of a billiards club night.
 
 Common problems:
 
-- poor multi-table coordination
-- awkward manual match ordering
-- weak support for late arrivals
-- cluttered or outdated UI
-- no good public screen for players checking the bracket
+- Poor multi-table coordination
+- Awkward manual match ordering
+- Weak support for late arrivals
+- Cluttered or outdated UI
+- No good public screen for players checking the bracket
 
 This app is meant to solve those problems with a cleaner and more practical system.
 
 ## Features
 
-### Tournament Formats
+### Tournament formats
 
 - 8-ball
 - 9-ball
-- singles
-- doubles
-- single elimination
-- double elimination
+- Singles
+- Doubles
+- Single elimination
+- Double elimination
 
-### Queue Management
+### Queue management
 
-- automatic Next Up and On Deck assignment
-- match ordering designed for two-table play
-- avoids assigning players already in progress
-- supports mixed winner/loser bracket card ordering for easier tournament running
+- Automatic Next Up and On Deck assignment
+- Match ordering designed for two-table play
+- Avoids assigning players already in progress
+- Supports mixed winner/loser bracket card ordering for easier tournament running
 
 ### Views
 
-- admin view for running the bracket
-- public view for players checking the tournament
-- call-to-table display
-- leaderboard display
-- bracket display
+- Admin view for running the bracket
+- Public view for players checking the tournament
+- Call-to-table display
+- Leaderboard display
+- Bracket display
 - QR code for easy phone access
 
-### Tournament Controls
+### Tournament controls
 
-- create a new bracket from a player list
-- start matches
-- finish matches
-- rename players
-- add late arrivals
-- reset and rebuild brackets
+- Create a new bracket from a player list
+- Start matches
+- Finish matches
+- Rename players
+- Add late arrivals
+- Reset and rebuild brackets
 
-### Club Features
+### Club features
 
-- optional club stat tracking
-- leaderboard support
-- exportable tournament summary
-- balanced random doubles team generation using hidden player ratings
+- Optional club stat tracking
+- Leaderboard support
+- Exportable tournament summary
+- Balanced random doubles team generation using hidden player ratings
 
-## Live Site
+## Live site
 
 The site is deployed on GitHub Pages:
 
@@ -69,7 +69,7 @@ The site is deployed on GitHub Pages:
 https://tjblech.github.io/Billiards/
 ```
 
-## Tech Stack
+## Tech stack
 
 - React
 - TypeScript
@@ -107,17 +107,17 @@ The Vite config uses:
 base: "/Billiards/"
 ```
 
-## Current Status
+## Current status
 
 The project is live and functional, and it is still being improved.
 
-## Future Improvements
+## Future improvements
 
 - Supabase integration for synced multi-device updates
-- improved live public display behavior
-- better double-elimination scheduling logic
-- easier late-entry handling
-- stronger admin controls for editing active brackets
+- Improved live public display behavior
+- Better double-elimination scheduling logic
+- Easier late-entry handling
+- Stronger admin controls for editing active brackets
 
 ## License
 
