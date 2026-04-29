@@ -193,11 +193,17 @@ function playerName(players: Player[], id: string | null) {
   return players.find((p) => p.id === id)?.name ?? "TBD";
 }
 
+function isByeSlot(match: Match, slot: 1 | 2) {
+  const currentId = slot === 1 ? match.player1Id : match.player2Id;
+  const otherId = slot === 1 ? match.player2Id : match.player1Id;
+  return !currentId && !!otherId;
+}
+
 function playerNameForSlot(players: Player[], match: Match, slot: 1 | 2) {
   const currentId = slot === 1 ? match.player1Id : match.player2Id;
   const otherId = slot === 1 ? match.player2Id : match.player1Id;
   if (currentId) return playerName(players, currentId);
-  if (otherId) return "Bye Round";
+  if (otherId) return "— BYE —";
   return "TBD";
 }
 
@@ -1207,10 +1213,10 @@ function MatchCard({
         </div>
       </div>
 
-      <div className={`rounded-xl px-3 py-2 ${winner1 ? "bg-emerald-500/15 text-emerald-200" : "bg-black/25"}`}>
+      <div className={`rounded-xl px-3 py-2 ${winner1 ? "bg-emerald-500/15 text-emerald-200" : isByeSlot(match, 1) ? "bg-black/10 text-slate-500 italic text-sm" : "bg-black/25"}`}>
         {p1}
       </div>
-      <div className={`rounded-xl px-3 py-2 ${winner2 ? "bg-emerald-500/15 text-emerald-200" : "bg-black/25"}`}>
+      <div className={`rounded-xl px-3 py-2 ${winner2 ? "bg-emerald-500/15 text-emerald-200" : isByeSlot(match, 2) ? "bg-black/10 text-slate-500 italic text-sm" : "bg-black/25"}`}>
         {p2}
       </div>
 
@@ -1305,14 +1311,25 @@ function SingleBracketGraphic({
   const centersByMatch = new Map<string, number>();
   const topsByMatch = new Map<string, number>();
 
-  orderedRounds.forEach(([_, roundMatches], roundIndex) => {
+  orderedRounds.forEach(([roundNumber, roundMatches], roundIndex) => {
     roundMatches.forEach((match, index) => {
       let centerY = 0;
       if (roundIndex === 0) {
         centerY = roundHeaderHeight + innerPad + index * firstRoundStep + matchHeight / 2;
       } else {
-        const prevA = matches.find((m) => m.round === match.round - 1 && m.slot === match.slot * 2);
-        const prevB = matches.find((m) => m.round === match.round - 1 && m.slot === match.slot * 2 + 1);
+        // Losers bracket has two types of rounds:
+        // - Odd L rounds (>1): "drop-in" rounds where W losers join, same match count as previous L round, 1:1 slot mapping
+        // - Even L rounds: "consolidation" rounds, match count halves, use tree layout (slot*2, slot*2+1)
+        const isLOddDropIn = match.bracket === "L" && roundNumber > 1 && roundNumber % 2 === 1;
+        let prevA: Match | undefined;
+        let prevB: Match | undefined;
+        if (isLOddDropIn) {
+          prevA = matches.find((m) => m.bracket === "L" && m.round === match.round - 1 && m.slot === match.slot);
+          prevB = undefined;
+        } else {
+          prevA = matches.find((m) => m.round === match.round - 1 && m.bracket === match.bracket && m.slot === match.slot * 2);
+          prevB = matches.find((m) => m.round === match.round - 1 && m.bracket === match.bracket && m.slot === match.slot * 2 + 1);
+        }
         const fallbackTop = roundHeaderHeight + innerPad + index * firstRoundStep;
         const aCenter = prevA ? centersByMatch.get(prevA.id) : undefined;
         const bCenter = prevB ? centersByMatch.get(prevB.id) : undefined;
@@ -1327,7 +1344,7 @@ function SingleBracketGraphic({
   });
 
   return (
-    <div className="bracket-board w-full overflow-x-auto overflow-y-visible rounded-3xl border border-white/10 bg-black/20 p-3 pb-8">
+    <div className="bracket-board w-full overflow-x-auto overflow-y-visible rounded-3xl border border-white/10 bg-black/20 p-3 pb-8" style={{WebkitOverflowScrolling: "touch"}}>
       <div
         className="relative min-w-full overflow-visible"
         style={{
@@ -1350,12 +1367,15 @@ function SingleBracketGraphic({
           viewBox={`0 0 ${Math.max(totalWidth, 760)} ${totalHeight}`}
           fill="none"
         >
-          {orderedRounds.slice(0, -1).flatMap(([_, roundMatches], roundIndex) =>
+          {orderedRounds.slice(0, -1).flatMap(([roundNumber, roundMatches], roundIndex) =>
             roundMatches.map((match) => {
               const fromCenterY = centersByMatch.get(match.id) ?? 0;
               const fromX = innerPad + roundIndex * (cardWidth + colGap) + cardWidth;
               const elbowX = fromX + colGap / 2;
-              const nextMatch = matches.find((m) => m.round === match.round + 1 && m.slot === Math.floor(match.slot / 2));
+              // For L bracket: even next round = consolidation (slot/2), odd next round = drop-in (same slot)
+              const nextRoundIsDropIn = match.bracket === "L" && (match.round + 1) % 2 === 1 && match.round + 1 > 1;
+              const nextSlot = nextRoundIsDropIn ? match.slot : Math.floor(match.slot / 2);
+              const nextMatch = matches.find((m) => m.round === match.round + 1 && m.bracket === match.bracket && m.slot === nextSlot);
               const toCenterY = nextMatch ? centersByMatch.get(nextMatch.id) ?? fromCenterY : fromCenterY;
 
               return (
@@ -1396,10 +1416,10 @@ function SingleBracketGraphic({
                         <StatusPill status={match.status} />
                       </div>
                       <div className="mt-1 flex-1 space-y-2 text-[15px] min-h-0">
-                        <div className={`truncate rounded-xl px-4 py-3 ${winner1 ? "bg-emerald-500/18 text-emerald-100 ring-1 ring-emerald-300/20" : "bg-white/[0.06]"}`}>
+                        <div className={`truncate rounded-xl px-4 py-3 ${winner1 ? "bg-emerald-500/18 text-emerald-100 ring-1 ring-emerald-300/20" : isByeSlot(match, 1) ? "bg-black/10 text-slate-500 italic text-sm" : "bg-white/[0.06]"}`}>
                           {playerNameForSlot(tournament.players, match, 1)}
                         </div>
-                        <div className={`truncate rounded-xl px-4 py-3 ${winner2 ? "bg-emerald-500/18 text-emerald-100 ring-1 ring-emerald-300/20" : "bg-white/[0.06]"}`}>
+                        <div className={`truncate rounded-xl px-4 py-3 ${winner2 ? "bg-emerald-500/18 text-emerald-100 ring-1 ring-emerald-300/20" : isByeSlot(match, 2) ? "bg-black/10 text-slate-500 italic text-sm" : "bg-white/[0.06]"}`}>
                           {playerNameForSlot(tournament.players, match, 2)}
                         </div>
                       </div>
