@@ -435,36 +435,44 @@ function getPlayerLastFinishedRound(matches: Match[], playerId: string | null) {
   return lastRound;
 }
 
-function getBottomCardOrder(matches: Match[]) {
-  const roundOneWinners = matches
-    .filter((match) => match.bracket === "W" && match.round === 1)
-    .sort((a, b) => a.slot - b.slot);
+function getBottomCardOrder(matches: Match[], bracketType?: BracketType) {
+  const grandFinals = matches
+    .filter((m) => m.bracket === "GF")
+    .sort((a, b) => a.round - b.round || a.slot - b.slot);
 
-  function getPlayWave(match: Match) {
-    if (match.bracket === "W") return Math.max(match.round - 2, 0);
-    if (match.bracket === "L") return Math.max(match.round - 1, 0);
-    return Number.MAX_SAFE_INTEGER;
+  // For single elim or no losers bracket, just sort by round+slot
+  const hasLosers = matches.some((m) => m.bracket === "L");
+  if (bracketType !== "double-elim" || !hasLosers) {
+    const nonGF = matches
+      .filter((m) => m.bracket !== "GF")
+      .sort((a, b) => a.round - b.round || a.slot - b.slot);
+    return [...nonGF, ...grandFinals];
   }
 
+  // Double elim: all W-R1 first, then alternate W then L by play order.
+  // After W-R1 completes: W-R2 (drops losers into L-R1), then L-R1,
+  // then W-R3, then L-R2, L-R3, then W-R4, then L-R4, L-R5, etc.
+  // Interleave position: W round r → r-2, L round r → r-1.5
+  // This puts W-R2 (0) before L-R1 (-0.5)... adjust so W always comes first within a wave:
+  // W round r → (r - 2) * 2       → W2=0, W3=2, W4=4, W5=6
+  // L round r → (r - 1) * 2 - 1   → L1=1, L2=3, L3=5, L4=7
+  const interleavePos = (m: Match) => {
+    if (m.bracket === "W") return (m.round - 2) * 2;
+    if (m.bracket === "L") return (m.round - 1) * 2 - 1;
+    return Number.MAX_SAFE_INTEGER;
+  };
+
+  const roundOneWinners = matches
+    .filter((m) => m.bracket === "W" && m.round === 1)
+    .sort((a, b) => a.slot - b.slot);
+
   const remaining = matches
-    .filter((match) => !(match.bracket === "W" && match.round === 1) && match.bracket !== "GF")
+    .filter((m) => !(m.bracket === "W" && m.round === 1) && m.bracket !== "GF")
     .sort((a, b) => {
-      const waveDiff = getPlayWave(a) - getPlayWave(b);
-      if (waveDiff !== 0) return waveDiff;
-
-      if (a.slot !== b.slot) return a.slot - b.slot;
-
-      if (a.bracket === b.bracket) return 0;
-      if (a.bracket === "W" && b.bracket === "L") return -1;
-      if (a.bracket === "L" && b.bracket === "W") return 1;
-
-      if (a.round !== b.round) return a.round - b.round;
-      return 0;
+      const posDiff = interleavePos(a) - interleavePos(b);
+      if (posDiff !== 0) return posDiff;
+      return a.slot - b.slot;
     });
-
-  const grandFinals = matches
-    .filter((match) => match.bracket === "GF")
-    .sort((a, b) => a.round - b.round || a.slot - b.slot);
 
   return [...roundOneWinners, ...remaining, ...grandFinals];
 }
@@ -1526,8 +1534,8 @@ function PublicBracketView({
   const champion = championId ? playerName(tournament.players, championId) : "";
   const publicUrl =
     typeof window !== "undefined"
-      ? `${window.location.origin}${window.location.pathname}#public`
-      : "#public";
+      ? `${window.location.origin}${window.location.pathname}?public=1`
+      : "?public=1";
   const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(publicUrl)}`;
 
   return (
@@ -1739,8 +1747,8 @@ function CallToTableView({
 }
 
 export default function BilliardsTournamentManager() {
-  const [publicOnlyAccess] = useState(() => window.location.hash.includes("public"));
-  const [mode, setMode] = useState<ViewMode>(window.location.hash.includes("public") ? "public" : "admin");
+  const [publicOnlyAccess] = useState(() => window.location.hash.includes("public") || new URLSearchParams(window.location.search).has("public"));
+  const [mode, setMode] = useState<ViewMode>(() => (window.location.hash.includes("public") || new URLSearchParams(window.location.search).has("public")) ? "public" : "admin");
   const [adminTab, setAdminTab] = useState<AdminTab>("dashboard");
   const [name, setName] = useState(DEFAULT_TOURNAMENT_NAME);
   const [playerText, setPlayerText] = useState(DEFAULT_PLAYER_LIST);
@@ -1779,7 +1787,6 @@ export default function BilliardsTournamentManager() {
     const onHashChange = () => {
       if (publicOnlyAccess) {
         setMode("public");
-        if (!window.location.hash.includes("public")) window.location.hash = "public";
         return;
       }
       setMode(window.location.hash.includes("public") ? "public" : "admin");
@@ -1881,7 +1888,7 @@ export default function BilliardsTournamentManager() {
   }
 
   function handleCopyPublicLink() {
-    const publicUrl = `${window.location.origin}${window.location.pathname}#public`;
+    const publicUrl = `${window.location.origin}${window.location.pathname}?public=1`;
     navigator.clipboard?.writeText(publicUrl);
     setCopiedPublicLink(true);
     window.setTimeout(() => setCopiedPublicLink(false), 1400);
@@ -2196,10 +2203,10 @@ export default function BilliardsTournamentManager() {
               <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                 <div>
                   <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Public View</div>
-                  <div className="mt-2 text-sm text-slate-300 break-all">{typeof window !== "undefined" ? `${window.location.origin}${window.location.pathname}#public` : "#public"}</div>
+                  <div className="mt-2 text-sm text-slate-300 break-all">{typeof window !== "undefined" ? `${window.location.origin}${window.location.pathname}?public=1` : "?public=1"}</div>
                 </div>
                 <div className="flex items-center gap-3">
-                  <img src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(typeof window !== "undefined" ? `${window.location.origin}${window.location.pathname}#public` : "#public")}`} alt="QR code for public bracket view" className="h-20 w-20 rounded-2xl border border-white/10 bg-white p-2" />
+                  <img src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(typeof window !== "undefined" ? `${window.location.origin}${window.location.pathname}?public=1` : "?public=1")}`} alt="QR code for public bracket view" className="h-20 w-20 rounded-2xl border border-white/10 bg-white p-2" />
                   <button onClick={handleCopyPublicLink} className="rounded-2xl bg-white/10 px-4 py-2 font-semibold text-white transition-transform duration-150 hover:-translate-y-0.5">
                     <Copy className="mr-2 inline h-4 w-4" /> {copiedPublicLink ? "Copied" : "Copy Link"}
                   </button>
@@ -2279,7 +2286,7 @@ export default function BilliardsTournamentManager() {
                   <BracketGraphic tournament={tournament} compact={true} animatedMatchIds={animatedMatchIds} />
                 </div>
                 <div className="grid gap-3 lg:grid-cols-2">
-                  {getBottomCardOrder(allMatches).map((match) => (
+                  {getBottomCardOrder(allMatches, tournament.settings.bracketType).map((match) => (
                     <MatchCard
                       key={match.id}
                       tournament={tournament}
