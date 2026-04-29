@@ -199,6 +199,11 @@ function isByeSlot(match: Match, slot: 1 | 2) {
   return !currentId && !!otherId;
 }
 
+/** A bye match has exactly one real player — the other slot is empty. It should be auto-advanced and hidden. */
+function isByeMatch(match: Match) {
+  return (match.player1Id && !match.player2Id) || (!match.player1Id && match.player2Id);
+}
+
 function playerNameForSlot(players: Player[], match: Match, slot: 1 | 2) {
   const currentId = slot === 1 ? match.player1Id : match.player2Id;
   const otherId = slot === 1 ? match.player2Id : match.player1Id;
@@ -400,6 +405,17 @@ function propagateBracket(matches: Match[], bracketType: BracketType) {
       match.winnerId = null;
       match.status = "waiting";
       match.tableNumber = null;
+    }
+
+    // Auto-advance bye matches: if exactly one player is present, they win automatically
+    if (match.status !== "finished" && match.status !== "inProgress") {
+      if (match.player1Id && !match.player2Id) {
+        match.winnerId = match.player1Id;
+        match.status = "finished";
+      } else if (match.player2Id && !match.player1Id) {
+        match.winnerId = match.player2Id;
+        match.status = "finished";
+      }
     }
 
     if (!match.player1Id && !match.player2Id && match.status !== "finished" && match.status !== "inProgress") {
@@ -1281,10 +1297,12 @@ function SingleBracketGraphic({
   animatedMatchIds?: string[];
   title?: string;
 }) {
-  if (matches.length === 0) return null;
+  // Hide bye matches — auto-advanced, no need to show them
+  const visibleMatches = matches.filter((m) => !isByeMatch(m));
+  if (visibleMatches.length === 0) return null;
 
   const roundMap = new Map<number, Match[]>();
-  for (const match of matches) {
+  for (const match of visibleMatches) {
     const arr = roundMap.get(match.round) ?? [];
     arr.push(match);
     roundMap.set(match.round, arr);
@@ -1303,13 +1321,27 @@ function SingleBracketGraphic({
   const bottomBuffer = compact ? 96 : 128;
 
   const firstRoundCount = orderedRounds[0][1].length;
+  const maxRoundCount = Math.max(...orderedRounds.map(([_, rm]) => rm.length));
   const firstRoundStep = matchHeight + firstRoundGap;
-  const bodyHeight = Math.max(firstRoundCount * matchHeight + Math.max(firstRoundCount - 1, 0) * firstRoundGap + bottomBuffer, matchHeight + bottomBuffer);
+  const bodyHeight = Math.max(maxRoundCount * matchHeight + Math.max(maxRoundCount - 1, 0) * firstRoundGap + bottomBuffer, matchHeight + bottomBuffer);
   const totalHeight = roundHeaderHeight + innerPad + bodyHeight + innerPad * 2;
   const totalWidth = orderedRounds.length * cardWidth + Math.max(orderedRounds.length - 1, 0) * colGap + innerPad * 2;
 
   const centersByMatch = new Map<string, number>();
   const topsByMatch = new Map<string, number>();
+
+  // Helper: get the Y center for a match, walking past hidden bye matches to find a visible ancestor
+  function resolveCenter(m: Match | undefined): number | undefined {
+    if (!m) return undefined;
+    const c = centersByMatch.get(m.id);
+    if (typeof c === "number") return c;
+    // This match was a bye (hidden) - try its own parent
+    if (m.source1) {
+      const parent = matches.find((p) => p.id === m.source1!.matchId);
+      return resolveCenter(parent);
+    }
+    return undefined;
+  }
 
   orderedRounds.forEach(([roundNumber, roundMatches], roundIndex) => {
     roundMatches.forEach((match, index) => {
@@ -1317,9 +1349,6 @@ function SingleBracketGraphic({
       if (roundIndex === 0) {
         centerY = roundHeaderHeight + innerPad + index * firstRoundStep + matchHeight / 2;
       } else {
-        // Losers bracket has two types of rounds:
-        // - Odd L rounds (>1): "drop-in" rounds where W losers join, same match count as previous L round, 1:1 slot mapping
-        // - Even L rounds: "consolidation" rounds, match count halves, use tree layout (slot*2, slot*2+1)
         const isLOddDropIn = match.bracket === "L" && roundNumber > 1 && roundNumber % 2 === 1;
         let prevA: Match | undefined;
         let prevB: Match | undefined;
@@ -1331,8 +1360,8 @@ function SingleBracketGraphic({
           prevB = matches.find((m) => m.round === match.round - 1 && m.bracket === match.bracket && m.slot === match.slot * 2 + 1);
         }
         const fallbackTop = roundHeaderHeight + innerPad + index * firstRoundStep;
-        const aCenter = prevA ? centersByMatch.get(prevA.id) : undefined;
-        const bCenter = prevB ? centersByMatch.get(prevB.id) : undefined;
+        const aCenter = resolveCenter(prevA);
+        const bCenter = resolveCenter(prevB);
         if (typeof aCenter === "number" && typeof bCenter === "number") centerY = (aCenter + bCenter) / 2;
         else if (typeof aCenter === "number") centerY = aCenter;
         else if (typeof bCenter === "number") centerY = bCenter;
@@ -2306,7 +2335,7 @@ export default function BilliardsTournamentManager() {
                   <BracketGraphic tournament={tournament} compact={true} animatedMatchIds={animatedMatchIds} />
                 </div>
                 <div className="grid gap-3 lg:grid-cols-2">
-                  {getBottomCardOrder(allMatches, tournament.settings.bracketType).map((match) => (
+                  {getBottomCardOrder(allMatches, tournament.settings.bracketType).filter((match) => !isByeMatch(match)).map((match) => (
                     <MatchCard
                       key={match.id}
                       tournament={tournament}
