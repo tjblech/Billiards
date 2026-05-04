@@ -1297,12 +1297,10 @@ function SingleBracketGraphic({
   animatedMatchIds?: string[];
   title?: string;
 }) {
-  // Hide bye matches — auto-advanced, no need to show them
-  const visibleMatches = matches.filter((m) => !isByeMatch(m));
-  if (visibleMatches.length === 0) return null;
+  if (matches.length === 0) return null;
 
   const roundMap = new Map<number, Match[]>();
-  for (const match of visibleMatches) {
+  for (const match of matches) {
     const arr = roundMap.get(match.round) ?? [];
     arr.push(match);
     roundMap.set(match.round, arr);
@@ -1312,153 +1310,60 @@ function SingleBracketGraphic({
     .sort((a, b) => a[0] - b[0])
     .map(([roundNumber, roundMatches]) => [roundNumber, [...roundMatches].sort((a, b) => a.slot - b.slot)] as const);
 
-  const matchHeight = compact ? 154 : 186;
-  const firstRoundGap = compact ? 38 : 58;
-  const cardWidth = compact ? 290 : 330;
-  const colGap = compact ? 72 : 92;
-  const roundHeaderHeight = title ? 96 : 44; 
-  const innerPad = 18;
-  const bottomBuffer = compact ? 96 : 128;
-
-  const firstRoundCount = orderedRounds[0][1].length;
-  const maxRoundCount = Math.max(...orderedRounds.map(([_, rm]) => rm.length));
-  const firstRoundStep = matchHeight + firstRoundGap;
-  const bodyHeight = Math.max(maxRoundCount * matchHeight + Math.max(maxRoundCount - 1, 0) * firstRoundGap + bottomBuffer, matchHeight + bottomBuffer);
-  const totalHeight = roundHeaderHeight + innerPad + bodyHeight + innerPad * 2;
-  const totalWidth = orderedRounds.length * cardWidth + Math.max(orderedRounds.length - 1, 0) * colGap + innerPad * 2;
-
-  const centersByMatch = new Map<string, number>();
-  const topsByMatch = new Map<string, number>();
-
-  // Helper: get the Y center for a match, walking past hidden bye matches to find a visible ancestor
-  function resolveCenter(m: Match | undefined): number | undefined {
-    if (!m) return undefined;
-    const c = centersByMatch.get(m.id);
-    if (typeof c === "number") return c;
-    // This match was a bye (hidden) - try its own parent
-    if (m.source1) {
-      const parent = matches.find((p) => p.id === m.source1!.matchId);
-      return resolveCenter(parent);
-    }
-    return undefined;
-  }
-
-  orderedRounds.forEach(([roundNumber, roundMatches], roundIndex) => {
-    roundMatches.forEach((match, index) => {
-      let centerY = 0;
-      if (roundIndex === 0) {
-        centerY = roundHeaderHeight + innerPad + index * firstRoundStep + matchHeight / 2;
-      } else {
-        const isLOddDropIn = match.bracket === "L" && roundNumber > 1 && roundNumber % 2 === 1;
-        let prevA: Match | undefined;
-        let prevB: Match | undefined;
-        if (isLOddDropIn) {
-          prevA = matches.find((m) => m.bracket === "L" && m.round === match.round - 1 && m.slot === match.slot);
-          prevB = undefined;
-        } else {
-          prevA = matches.find((m) => m.round === match.round - 1 && m.bracket === match.bracket && m.slot === match.slot * 2);
-          prevB = matches.find((m) => m.round === match.round - 1 && m.bracket === match.bracket && m.slot === match.slot * 2 + 1);
-        }
-        const fallbackTop = roundHeaderHeight + innerPad + index * firstRoundStep;
-        const aCenter = resolveCenter(prevA);
-        const bCenter = resolveCenter(prevB);
-        if (typeof aCenter === "number" && typeof bCenter === "number") centerY = (aCenter + bCenter) / 2;
-        else if (typeof aCenter === "number") centerY = aCenter;
-        else if (typeof bCenter === "number") centerY = bCenter;
-        else centerY = fallbackTop + matchHeight / 2;
-      }
-      centersByMatch.set(match.id, centerY);
-      topsByMatch.set(match.id, centerY - matchHeight / 2);
-    });
-  });
+  const cardWidth = compact ? 260 : 310;
+  const minHeight = compact ? 128 : 150;
 
   return (
-    <div className="bracket-board w-full overflow-x-auto overflow-y-visible rounded-3xl border border-white/10 bg-black/20 p-3 pb-8" style={{WebkitOverflowScrolling: "touch"}}>
+    <div className="bracket-board w-full overflow-x-auto rounded-3xl border border-white/10 bg-black/20 p-4" style={{ WebkitOverflowScrolling: "touch" }}>
+      {title ? (
+        <div className="mb-5 text-sm font-semibold uppercase tracking-[0.24em] text-emerald-200/90">
+          {title}
+        </div>
+      ) : null}
+
       <div
-        className="relative min-w-full overflow-visible"
+        className="grid items-start gap-5"
         style={{
-          width: `${Math.max(totalWidth, 760)}px`,
-          height: `${totalHeight}px`,
-          minHeight: `${totalHeight}px`,
-          paddingBottom: `${innerPad}px`,
+          gridTemplateColumns: `repeat(${orderedRounds.length}, minmax(${cardWidth}px, ${cardWidth}px))`,
+          minWidth: `${orderedRounds.length * cardWidth + Math.max(orderedRounds.length - 1, 0) * 20}px`,
         }}
       >
-        {title ? (
-  <div className="absolute left-0 top-0 text-sm font-semibold uppercase tracking-[0.24em] text-emerald-200/90">
-    {title}
-  </div>
-) : null}
+        {orderedRounds.map(([roundNumber, roundMatches]) => (
+          <div key={roundNumber} className="min-w-0">
+            <div className="mb-4 text-center text-sm font-semibold uppercase tracking-[0.24em] text-emerald-200/90">
+              {getRoundTitle(roundNumber, roundMatches.length, roundMatches[0]?.bracket ?? "W")}
+            </div>
 
-        <svg
-          className="pointer-events-none absolute left-0 top-0"
-          width={Math.max(totalWidth, 760)}
-          height={totalHeight}
-          viewBox={`0 0 ${Math.max(totalWidth, 760)} ${totalHeight}`}
-          fill="none"
-        >
-          {orderedRounds.slice(0, -1).flatMap(([roundNumber, roundMatches], roundIndex) =>
-            roundMatches.map((match) => {
-              const fromCenterY = centersByMatch.get(match.id) ?? 0;
-              const fromX = innerPad + roundIndex * (cardWidth + colGap) + cardWidth;
-              const elbowX = fromX + colGap / 2;
-              // For L bracket: even next round = consolidation (slot/2), odd next round = drop-in (same slot)
-              const nextRoundIsDropIn = match.bracket === "L" && (match.round + 1) % 2 === 1 && match.round + 1 > 1;
-              const nextSlot = nextRoundIsDropIn ? match.slot : Math.floor(match.slot / 2);
-              const nextMatch = matches.find((m) => m.round === match.round + 1 && m.bracket === match.bracket && m.slot === nextSlot);
-              const toCenterY = nextMatch ? centersByMatch.get(nextMatch.id) ?? fromCenterY : fromCenterY;
-
-              return (
-                <g key={`${match.id}-connector`} stroke="rgba(110, 231, 183, 0.32)" strokeWidth="1.5" strokeLinecap="round">
-                  <line x1={fromX} y1={fromCenterY} x2={elbowX} y2={fromCenterY} />
-                  <line x1={elbowX} y1={fromCenterY} x2={elbowX} y2={toCenterY} />
-                  <line x1={elbowX} y1={toCenterY} x2={fromX + colGap} y2={toCenterY} />
-                </g>
-              );
-            })
-          )}
-        </svg>
-
-        {orderedRounds.map(([roundNumber, roundMatches], roundIndex) => {
-          const columnLeft = innerPad + roundIndex * (cardWidth + colGap);
-          return (
-            <div key={roundNumber} className="absolute top-0" style={{ left: `${columnLeft}px`, width: `${cardWidth}px` }}>
-              <div className="mb-3 h-11 pt-6 text-center text-sm font-semibold uppercase tracking-[0.24em] text-emerald-200/90">
-                {getRoundTitle(roundNumber, roundMatches.length, roundMatches[0]?.bracket ?? "W")}
-              </div>
-
+            <div className="space-y-4">
               {roundMatches.map((match) => {
-                const top = topsByMatch.get(match.id) ?? roundHeaderHeight + innerPad;
                 const isRealWin = match.status === "finished";
-
                 const winner1 = isRealWin && match.winnerId === match.player1Id;
                 const winner2 = isRealWin && match.winnerId === match.player2Id;
 
                 return (
                   <div
                     key={match.id}
-                    className="absolute left-0"
-                    style={{ top: `${top}px`, width: `${cardWidth}px`, height: `${matchHeight}px` }}
+                    className={`bracket-match rounded-[22px] border border-white/10 bg-[#081325]/95 p-3 shadow-[0_12px_30px_rgba(0,0,0,0.28)] transition-all duration-300 ${animatedMatchIds.includes(match.id) ? "animate-[queueSlide_0.42s_ease-out]" : ""}`}
+                    style={{ minHeight: `${minHeight}px` }}
                   >
-                    <div className={`bracket-match flex h-full flex-col rounded-[22px] border border-white/10 bg-[#081325]/95 px-3 pb-4 pt-2.5 shadow-[0_12px_30px_rgba(0,0,0,0.28)] overflow-visible transition-all duration-300 ${animatedMatchIds.includes(match.id) ? "animate-[queueSlide_0.42s_ease-out]" : ""}`}>
-                      <div className="mb-2 flex items-center justify-between gap-2 text-xs text-slate-400">
-                        <span>{getMatchDisplayLabel(match)}</span>
-                        <StatusPill status={match.status} />
+                    <div className="mb-3 flex items-center justify-between gap-2 text-xs text-slate-400">
+                      <span>{getMatchDisplayLabel(match)}</span>
+                      <StatusPill status={match.status} />
+                    </div>
+                    <div className="space-y-2 text-[15px]">
+                      <div className={`truncate rounded-xl px-4 py-3 ${winner1 ? "bg-emerald-500/18 text-emerald-100 ring-1 ring-emerald-300/20" : isByeSlot(match, 1) ? "bg-black/10 text-slate-500 italic text-sm" : "bg-white/[0.06]"}`}>
+                        {playerNameForSlot(tournament.players, match, 1)}
                       </div>
-                      <div className="mt-1 flex-1 space-y-2 text-[15px] min-h-0">
-                        <div className={`truncate rounded-xl px-4 py-3 ${winner1 ? "bg-emerald-500/18 text-emerald-100 ring-1 ring-emerald-300/20" : isByeSlot(match, 1) ? "bg-black/10 text-slate-500 italic text-sm" : "bg-white/[0.06]"}`}>
-                          {playerNameForSlot(tournament.players, match, 1)}
-                        </div>
-                        <div className={`truncate rounded-xl px-4 py-3 ${winner2 ? "bg-emerald-500/18 text-emerald-100 ring-1 ring-emerald-300/20" : isByeSlot(match, 2) ? "bg-black/10 text-slate-500 italic text-sm" : "bg-white/[0.06]"}`}>
-                          {playerNameForSlot(tournament.players, match, 2)}
-                        </div>
+                      <div className={`truncate rounded-xl px-4 py-3 ${winner2 ? "bg-emerald-500/18 text-emerald-100 ring-1 ring-emerald-300/20" : isByeSlot(match, 2) ? "bg-black/10 text-slate-500 italic text-sm" : "bg-white/[0.06]"}`}>
+                        {playerNameForSlot(tournament.players, match, 2)}
                       </div>
                     </div>
                   </div>
                 );
               })}
             </div>
-          );
-        })}
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -1478,8 +1383,9 @@ function GrandFinalGraphic({
   return (
     <div className="grid gap-4 lg:grid-cols-2">
       {matches.sort((a, b) => a.round - b.round).map((match) => {
-        const winner1 = match.winnerId === match.player1Id && match.winnerId;
-        const winner2 = match.winnerId === match.player2Id && match.winnerId;
+        const isRealWin = match.status === "finished";
+        const winner1 = isRealWin && match.winnerId === match.player1Id;
+        const winner2 = isRealWin && match.winnerId === match.player2Id;
         return (
           <div key={match.id} className={`bracket-match rounded-[22px] border border-white/10 bg-[#081325]/95 p-4 shadow-[0_12px_30px_rgba(0,0,0,0.28)] ${animatedMatchIds.includes(match.id) ? "animate-[queueSlide_0.42s_ease-out]" : ""}`}>
             <div className="mb-3 flex items-center justify-between gap-2 text-xs text-slate-400">
