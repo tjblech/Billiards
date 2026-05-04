@@ -69,6 +69,19 @@ The site is deployed on GitHub Pages:
 https://tjblech.github.io/Billiards/
 ```
 
+
+## Phone / QR access
+
+Players can open the public view directly from a phone:
+
+```text
+https://tjblech.github.io/Billiards/#public
+```
+
+Use that URL when making a QR code.
+
+Note: the current version uses browser local storage, so different devices can open the site, but they will not receive live bracket updates from the admin device until a shared backend such as Supabase is added.
+
 ## Tech stack
 
 - React
